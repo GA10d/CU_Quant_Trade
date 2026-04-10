@@ -263,13 +263,6 @@ As an extension, a transformer encoder can be used to learn temporal representat
 
 The existing `track_b_pipeline.py` in the project provides an implementation of this approach.
 
-## Team Responsibilities
-
-**Kristine Vergara** - Data Collection and Preprocessing
-- Building unified dataset from financial and macroeconomic sources
-- Data quality assurance and alignment
-- Feature engineering support
-
 ## References
 
 1. Hamilton, J. D. (1989). A new approach to the economic analysis of nonstationary time series and the business cycle. *Econometrica*, 57(2), 357-384.
