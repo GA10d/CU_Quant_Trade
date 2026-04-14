@@ -1,0 +1,9 @@
+{
+  "sample_start": "2015-03-31",
+  "sample_end": "2026-04-14",
+  "window_count": 2717,
+  "best_val_loss": 0.6572241021527184,
+  "best_epoch": 8,
+  "ari_score": 0.1242529694601829,
+  "nmi_score": 0.2019803478890152
+}
