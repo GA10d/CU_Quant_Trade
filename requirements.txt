@@ -1,0 +1,19 @@
+# Core scientific stack
+numpy>=1.26.4
+pandas>=2.2.2
+scipy>=1.13.1
+matplotlib>=3.9.2
+scikit-learn>=1.6.0
+joblib>=1.4.2
+
+# Data access
+yfinance>=1.2.1
+pandas-datareader>=0.10.0
+
+# Modeling
+hmmlearn>=0.3.3
+torch>=2.5.0
+
+# Notebook environment
+notebook>=7.2.2
+ipython>=8.27.0
