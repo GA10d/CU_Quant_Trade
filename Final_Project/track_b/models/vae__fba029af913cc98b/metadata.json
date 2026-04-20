@@ -1,0 +1,22 @@
+{
+  "saved_at": "2026-04-20T05:07:57.223057+00:00",
+  "experiment_name": "vae",
+  "summary": {
+    "experiment_name": "vae",
+    "architecture": "vae",
+    "input_dim": 8,
+    "window_size": 60,
+    "n_sequence_rows": 2834,
+    "n_windows": 2775,
+    "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
+    "skipped_sequence_features": "",
+    "best_epoch": 25,
+    "best_val_loss": 0.9356216523382399,
+    "target_cluster_count": 4,
+    "silhouette": 0.025279207155108452,
+    "ari_vs_hmm": NaN,
+    "nmi_vs_hmm": NaN
+  },
+  "model_state_path": "f:\\Documents\\GitHub\\CU_Quant_Trade\\Final_Project\\track_b\\models\\vae__fba029af913cc98b\\model_state.pt",
+  "device": "cuda"
+}

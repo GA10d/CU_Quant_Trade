@@ -1,0 +1,22 @@
+{
+  "saved_at": "2026-04-20T05:03:01.607834+00:00",
+  "experiment_name": "conv_transformer",
+  "summary": {
+    "experiment_name": "conv_transformer",
+    "architecture": "conv_transformer",
+    "input_dim": 8,
+    "window_size": 60,
+    "n_sequence_rows": 2834,
+    "n_windows": 2775,
+    "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
+    "skipped_sequence_features": "",
+    "best_epoch": 31,
+    "best_val_loss": 0.7112935715251498,
+    "target_cluster_count": 4,
+    "silhouette": 0.24769698083400726,
+    "ari_vs_hmm": 0.12228311685490652,
+    "nmi_vs_hmm": 0.1800813378696028
+  },
+  "model_state_path": "f:\\Documents\\GitHub\\CU_Quant_Trade\\Final_Project\\track_b\\models\\conv_transformer__35df135859bfe0de\\model_state.pt",
+  "device": "cuda"
+}

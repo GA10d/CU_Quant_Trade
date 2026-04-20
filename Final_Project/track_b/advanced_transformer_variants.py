@@ -19,9 +19,11 @@ from encoder_only_transformer import (
     TrainingConfig,
     cluster_embeddings,
     masked_reconstruction_loss,
+    make_torch_dataloader_generator,
     resolve_device,
     run_encoder_only_experiment,
     set_seed,
+    split_ordered_train_random_holdout_indices,
 )
 from experiment_utils import (
     build_experiment_result,
@@ -345,14 +347,24 @@ def _train_masked_model(
     log_prefix: str,
 ) -> tuple[nn.Module, pd.DataFrame, torch.Tensor, torch.device]:
     device = resolve_device(training_config.device)
-    split_idx = max(1, int(len(windows) * training_config.train_ratio))
-    split_idx = min(split_idx, len(windows))
+    split_indices = split_ordered_train_random_holdout_indices(
+        n_obs=len(windows),
+        train_ratio=training_config.train_ratio,
+        validation_ratio=training_config.validation_ratio,
+        test_ratio=training_config.test_ratio,
+        random_state=training_config.random_state,
+    )
 
-    train_windows = torch.tensor(windows[:split_idx], dtype=torch.float32)
-    val_windows = torch.tensor(windows[split_idx:], dtype=torch.float32)
+    train_windows = torch.tensor(windows[split_indices["train"]], dtype=torch.float32)
+    val_windows = torch.tensor(windows[split_indices["validation"]], dtype=torch.float32)
     all_windows = torch.tensor(windows, dtype=torch.float32)
 
-    train_loader = DataLoader(TensorDataset(train_windows), batch_size=training_config.batch_size, shuffle=True)
+    train_loader = DataLoader(
+        TensorDataset(train_windows),
+        batch_size=training_config.batch_size,
+        shuffle=True,
+        generator=make_torch_dataloader_generator(training_config.random_state),
+    )
     from encoder_only_transformer import sample_mask
 
     if len(val_windows) > 0:
@@ -445,14 +457,24 @@ def _train_full_reconstruction_model(
     log_prefix: str,
 ) -> tuple[nn.Module, pd.DataFrame, torch.Tensor, torch.device]:
     device = resolve_device(training_config.device)
-    split_idx = max(1, int(len(windows) * training_config.train_ratio))
-    split_idx = min(split_idx, len(windows))
+    split_indices = split_ordered_train_random_holdout_indices(
+        n_obs=len(windows),
+        train_ratio=training_config.train_ratio,
+        validation_ratio=training_config.validation_ratio,
+        test_ratio=training_config.test_ratio,
+        random_state=training_config.random_state,
+    )
 
-    train_windows = torch.tensor(windows[:split_idx], dtype=torch.float32)
-    val_windows = torch.tensor(windows[split_idx:], dtype=torch.float32)
+    train_windows = torch.tensor(windows[split_indices["train"]], dtype=torch.float32)
+    val_windows = torch.tensor(windows[split_indices["validation"]], dtype=torch.float32)
     all_windows = torch.tensor(windows, dtype=torch.float32)
 
-    train_loader = DataLoader(TensorDataset(train_windows), batch_size=training_config.batch_size, shuffle=True)
+    train_loader = DataLoader(
+        TensorDataset(train_windows),
+        batch_size=training_config.batch_size,
+        shuffle=True,
+        generator=make_torch_dataloader_generator(training_config.random_state),
+    )
     val_loader = (
         DataLoader(TensorDataset(val_windows), batch_size=training_config.batch_size, shuffle=False)
         if len(val_windows) > 0

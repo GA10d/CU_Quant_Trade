@@ -17,6 +17,7 @@ from cluster_action_backtest import (
     save_evaluation_artifacts,
 )
 from encoder_only_transformer import HMMLEARN_AVAILABLE
+from experiment_cache import DEFAULT_MODELS_DIR, run_experiment_with_cache
 from experiment_presets import (
     build_architecture_runners,
     build_default_experiment_setups,
@@ -30,8 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cluster-count", type=int, default=4, choices=[3, 4])
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--objective", type=str, default="sharpe")
-    parser.add_argument("--validation-ratio", type=float, default=0.15)
-    parser.add_argument("--test-ratio", type=float, default=0.15)
+    parser.add_argument("--validation-ratio", type=float, default=0.20)
+    parser.add_argument("--test-ratio", type=float, default=0.10)
     parser.add_argument("--transaction-cost", type=float, default=0.001)
     parser.add_argument("--initial-capital", type=float, default=100000.0)
     parser.add_argument("--risk-free-rate", type=float, default=0.02)
@@ -45,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-random-choice-baseline", action="store_true", default=True)
     parser.add_argument("--skip-random-choice-baseline", dest="include_random_choice_baseline", action="store_false")
     parser.add_argument("--random-choice-seed", type=int, default=42)
+    parser.add_argument("--models-dir", type=str, default=str(DEFAULT_MODELS_DIR))
     parser.add_argument("--output-dir", type=str, default=None)
     return parser.parse_args()
 
@@ -100,6 +102,8 @@ def main() -> None:
             "training_config": replace(
                 setup["training_config"],
                 train_ratio=train_ratio,
+                validation_ratio=args.validation_ratio,
+                test_ratio=args.test_ratio,
                 device=args.device,
             ),
         }
@@ -168,13 +172,16 @@ def main() -> None:
     for setup in experiment_setups:
         runner = runners[setup["architecture"]]
         print(f"=== {setup['name']} ===")
-        experiment_result = runner(
+        experiment_result = run_experiment_with_cache(
+            runner=runner,
             experiment_name=setup["name"],
             data_config=setup["data_config"],
             model_config=setup["model_config"],
             training_config=setup["training_config"],
             clustering_config=setup["clustering_config"],
             hmm_config=setup["hmm_config"],
+            models_dir=args.models_dir,
+            verbose=True,
         )
         evaluation_result = evaluate_model_cluster_actions(
             experiment_result=experiment_result,

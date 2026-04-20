@@ -1,0 +1,22 @@
+{
+  "saved_at": "2026-04-20T05:03:35.726229+00:00",
+  "experiment_name": "pure_rnn",
+  "summary": {
+    "experiment_name": "pure_rnn",
+    "architecture": "pure_rnn",
+    "input_dim": 8,
+    "window_size": 60,
+    "n_sequence_rows": 2834,
+    "n_windows": 2775,
+    "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
+    "skipped_sequence_features": "",
+    "best_epoch": 11,
+    "best_val_loss": 0.7350436084800296,
+    "target_cluster_count": 4,
+    "silhouette": 0.26838332414627075,
+    "ari_vs_hmm": 0.022029035178157456,
+    "nmi_vs_hmm": 0.05706200618279843
+  },
+  "model_state_path": "f:\\Documents\\GitHub\\CU_Quant_Trade\\Final_Project\\track_b\\models\\pure_rnn__771a8bf880229077\\model_state.pt",
+  "device": "cuda"
+}

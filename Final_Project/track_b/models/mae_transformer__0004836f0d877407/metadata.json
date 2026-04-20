@@ -1,0 +1,22 @@
+{
+  "saved_at": "2026-04-20T05:03:29.297895+00:00",
+  "experiment_name": "mae_transformer",
+  "summary": {
+    "experiment_name": "mae_transformer",
+    "architecture": "mae_transformer",
+    "input_dim": 8,
+    "window_size": 60,
+    "n_sequence_rows": 2834,
+    "n_windows": 2775,
+    "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
+    "skipped_sequence_features": "",
+    "best_epoch": 6,
+    "best_val_loss": 1.011192606555091,
+    "target_cluster_count": 4,
+    "silhouette": 0.2046322077512741,
+    "ari_vs_hmm": 0.047545950654034656,
+    "nmi_vs_hmm": 0.09065774618087266
+  },
+  "model_state_path": "f:\\Documents\\GitHub\\CU_Quant_Trade\\Final_Project\\track_b\\models\\mae_transformer__0004836f0d877407\\model_state.pt",
+  "device": "cuda"
+}

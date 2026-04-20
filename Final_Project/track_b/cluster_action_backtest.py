@@ -16,6 +16,7 @@ from encoder_only_transformer import (
     TrainingConfig,
     build_hmm_reference,
     load_market_and_macro,
+    split_ordered_train_random_holdout_indices,
 )
 from experiment_utils import prepare_sequence_experiment_inputs
 
@@ -28,11 +29,12 @@ class ActionBacktestConfig:
     risk_free_rate: float = 0.02
     annualization_factor: int = 252
     execution_lag: int = 1
-    validation_ratio: float = 0.15
-    test_ratio: float = 0.15
+    validation_ratio: float = 0.20
+    test_ratio: float = 0.10
     objective: str = "sharpe"
     allow_action_reuse: bool = False
     fallback_action_name: str | None = None
+    split_random_state: int = 42
 
     @property
     def train_ratio(self) -> float:
@@ -200,23 +202,24 @@ def split_window_dates(
     window_end_dates: pd.Index,
     validation_ratio: float,
     test_ratio: float,
+    random_state: int = 42,
 ) -> dict[str, pd.Index]:
     n_obs = len(window_end_dates)
     if n_obs < 10:
         raise ValueError(f"Need at least 10 windows for backtesting splits, got {n_obs}.")
 
-    validation_count = max(1, int(round(n_obs * validation_ratio)))
-    test_count = max(1, int(round(n_obs * test_ratio)))
-    train_count = n_obs - validation_count - test_count
-    if train_count < 1:
-        raise ValueError(
-            "Not enough windows after validation/test split: "
-            f"train_count={train_count}, validation_count={validation_count}, test_count={test_count}."
-        )
+    train_ratio = 1.0 - validation_ratio - test_ratio
+    split_indices = split_ordered_train_random_holdout_indices(
+        n_obs=n_obs,
+        train_ratio=train_ratio,
+        validation_ratio=validation_ratio,
+        test_ratio=test_ratio,
+        random_state=random_state,
+    )
 
-    train_dates = window_end_dates[:train_count]
-    validation_dates = window_end_dates[train_count : train_count + validation_count]
-    test_dates = window_end_dates[train_count + validation_count :]
+    train_dates = window_end_dates[split_indices["train"]]
+    validation_dates = window_end_dates[split_indices["validation"]]
+    test_dates = window_end_dates[split_indices["test"]]
 
     return {
         "train": pd.Index(train_dates, name="Date"),
@@ -235,6 +238,7 @@ def summarize_split_dates(splits: dict[str, pd.Index]) -> pd.DataFrame:
                     "n_windows": 0,
                     "start_date": pd.NaT,
                     "end_date": pd.NaT,
+                    "selection": "empty",
                 }
             )
         else:
@@ -244,6 +248,7 @@ def summarize_split_dates(splits: dict[str, pd.Index]) -> pd.DataFrame:
                     "n_windows": int(len(split_dates)),
                     "start_date": pd.Timestamp(split_dates[0]),
                     "end_date": pd.Timestamp(split_dates[-1]),
+                    "selection": "ordered_oldest" if split_name == "train" else "random_from_holdout",
                 }
             )
     return pd.DataFrame(rows)
@@ -518,6 +523,7 @@ def evaluate_model_cluster_actions(
         window_end_dates=window_end_dates,
         validation_ratio=config.validation_ratio,
         test_ratio=config.test_ratio,
+        random_state=config.split_random_state,
     )
     split_summary = summarize_split_dates(splits)
 
@@ -580,6 +586,7 @@ def evaluate_random_choice_baseline(
         window_end_dates=window_end_dates,
         validation_ratio=config.validation_ratio,
         test_ratio=config.test_ratio,
+        random_state=config.split_random_state,
     )
     split_summary = summarize_split_dates(splits)
 
@@ -761,10 +768,16 @@ def _add_split_boundaries(ax, split_summary: pd.DataFrame, y_min: float, y_max: 
     for _, row in split_summary.iterrows():
         if pd.isna(row["start_date"]) or pd.isna(row["end_date"]):
             continue
+        if row.get("selection") != "ordered_oldest":
+            continue
         ax.axvspan(row["start_date"], row["end_date"], alpha=0.12, color=color_map.get(row["split"], "#eeeeee"))
 
-    for _, row in split_summary.iloc[1:].iterrows():
+    for _, row in split_summary.iterrows():
         if pd.isna(row["start_date"]):
+            continue
+        if row.get("selection") != "ordered_oldest":
+            continue
+        if row["split"] == "train":
             continue
         ax.axvline(row["start_date"], color="gray", linestyle="--", linewidth=1.0, alpha=0.8)
         ax.text(
@@ -842,7 +855,11 @@ def save_nav_comparison_gif(
     if len(dates) < 2:
         return False
 
-    fig, ax = plt.subplots(figsize=(14, 7))
+    fig, (ax, ax_rank) = plt.subplots(
+        ncols=2,
+        figsize=(18, 8),
+        gridspec_kw={"width_ratios": [4.8, 1.8]},
+    )
     lines = {column: ax.plot([], [], linewidth=2.0, label=column)[0] for column in plot_frame.columns}
     ax.set_xlim(dates.min(), dates.max())
     valid_values = plot_frame.to_numpy(dtype=float)
@@ -854,7 +871,10 @@ def save_nav_comparison_gif(
     ax.set_xlabel("Date")
     ax.set_ylabel(ylabel)
     ax.grid(alpha=0.25)
-    ax.legend(loc="best", fontsize=9)
+
+    ax_rank.set_axis_off()
+    ax_rank.set_xlim(0.0, 1.0)
+    ax_rank.set_ylim(0.0, 1.0)
 
     frame_indices = np.linspace(1, len(plot_frame), num=min(len(plot_frame), 80), dtype=int)
 
@@ -862,6 +882,47 @@ def save_nav_comparison_gif(
         current = plot_frame.iloc[:frame_end]
         for column, line in lines.items():
             line.set_data(current.index, current[column].to_numpy())
+
+        latest_values = current.iloc[-1].sort_values(ascending=False)
+        ax_rank.clear()
+        ax_rank.set_axis_off()
+        ax_rank.set_xlim(0.0, 1.0)
+        ax_rank.set_ylim(0.0, 1.0)
+        ax_rank.set_title("Current Ranking", fontsize=12, loc="left", pad=10)
+
+        n_items = len(latest_values)
+        top_margin = 0.94
+        bottom_margin = 0.04
+        step = (top_margin - bottom_margin) / max(n_items, 1)
+        font_size = max(7.5, min(10.5, 12.5 - 0.15 * max(0, n_items - 8)))
+
+        for rank, (column, latest_value) in enumerate(latest_values.items(), start=1):
+            y = top_margin - (rank - 1) * step
+            line_color = lines[column].get_color()
+            label_text = f"{rank:>2}. {column[:32]}"
+            value_text = f"{latest_value:.3f}"
+            ax_rank.text(
+                0.02,
+                y,
+                label_text,
+                fontsize=font_size,
+                color=line_color,
+                ha="left",
+                va="center",
+                family="monospace",
+                fontweight="bold" if rank <= 3 else "normal",
+            )
+            ax_rank.text(
+                0.98,
+                y,
+                value_text,
+                fontsize=font_size,
+                color=line_color,
+                ha="right",
+                va="center",
+                family="monospace",
+            )
+
         ax.set_title(f"{title}\nThrough {current.index[-1].date()}", fontsize=14)
         return list(lines.values())
 

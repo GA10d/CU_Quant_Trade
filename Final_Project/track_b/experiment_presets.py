@@ -11,6 +11,12 @@ from advanced_transformer_variants import (
     run_tcn_transformer_experiment,
     run_transformer_autoencoder_experiment,
 )
+from paper_transformer_variants import (
+    PatchTSTConfig,
+    PathformerConfig,
+    run_patchtst_experiment,
+    run_pathformer_experiment,
+)
 from autoencoder_and_clustering_baselines import (
     ClassicalClusteringConfig,
     SequenceAutoencoderConfig,
@@ -28,6 +34,7 @@ from encoder_only_transformer import (
     SequenceDataConfig,
     TrainingConfig,
     run_encoder_only_experiment,
+    run_market_tuple_encoder_only_experiment,
 )
 from rnn_baselines import (
     RecurrentBaselineConfig,
@@ -39,6 +46,9 @@ from rnn_baselines import (
 def build_architecture_runners() -> dict[str, object]:
     return {
         "encoder_only": run_encoder_only_experiment,
+        "encoder_only_market_tuples": run_market_tuple_encoder_only_experiment,
+        "patchtst": run_patchtst_experiment,
+        "pathformer": run_pathformer_experiment,
         "cls_token_transformer": run_cls_token_transformer_experiment,
         "conv_transformer": run_conv_transformer_experiment,
         "tcn_transformer": run_tcn_transformer_experiment,
@@ -62,6 +72,21 @@ def build_default_data_config(data_dir: str | Path) -> SequenceDataConfig:
         asset_return_columns=("SPY", "TLT", "GLD", "UUP", "HYG", "LQD"),
         include_vix_log_return=True,
         include_curve_slope_change=True,
+        strict_feature_availability=False,
+    )
+
+
+def build_market_tuple_data_config(data_dir: str | Path) -> SequenceDataConfig:
+    return SequenceDataConfig(
+        data_dir=Path(data_dir),
+        market_filename="market_data_full_adjusted.csv",
+        window_size=60,
+        sequence_feature_mode="market_tuples",
+        tuple_asset_columns=("GLD", "HYG", "LQD", "SPY", "TLT", "UUP", "VIX"),
+        tuple_market_fields=("Close", "High", "Low", "Open", "Volume"),
+        tuple_log1p_volume=True,
+        include_vix_log_return=False,
+        include_curve_slope_change=False,
         strict_feature_availability=False,
     )
 
@@ -92,7 +117,9 @@ def build_default_training_config(
     base_kwargs = dict(
         mask_ratio=0.20,
         batch_size=64,
-        train_ratio=0.8,
+        train_ratio=0.7,
+        validation_ratio=0.2,
+        test_ratio=0.1,
         early_stopping_patience=8,
         min_epochs=5,
         random_state=42,
@@ -102,6 +129,9 @@ def build_default_training_config(
 
     presets = {
         "encoder_only": dict(num_epochs=80, learning_rate=1e-3, weight_decay=1e-4),
+        "encoder_only_market_tuples": dict(num_epochs=80, learning_rate=1e-3, weight_decay=1e-4),
+        "patchtst": dict(num_epochs=80, learning_rate=8e-4, weight_decay=1e-4),
+        "pathformer": dict(num_epochs=80, learning_rate=8e-4, weight_decay=1e-4),
         "cls_token_transformer": dict(num_epochs=80, learning_rate=1e-3, weight_decay=1e-4),
         "conv_transformer": dict(num_epochs=60, learning_rate=8e-4, weight_decay=1e-4),
         "tcn_transformer": dict(num_epochs=60, learning_rate=8e-4, weight_decay=1e-4),
@@ -129,6 +159,43 @@ def build_default_model_config(architecture_name: str):
             feedforward_multiplier=2.0,
             pooling="attention",
             use_mask_embedding=True,
+        ),
+        "encoder_only_market_tuples": EncoderOnlyTransformerConfig(
+            d_model=128,
+            embedding_dim=64,
+            n_heads=8,
+            num_layers=2,
+            dropout=0.10,
+            feedforward_multiplier=2.0,
+            pooling="attention",
+            use_mask_embedding=True,
+        ),
+        "patchtst": PatchTSTConfig(
+            architecture="patchtst",
+            patch_len=6,
+            patch_stride=3,
+            d_model=64,
+            embedding_dim=64,
+            n_heads=4,
+            num_layers=2,
+            dropout=0.10,
+            feedforward_multiplier=2.0,
+            pooling="attention",
+            channel_pooling="attention",
+            use_mask_embedding=True,
+        ),
+        "pathformer": PathformerConfig(
+            architecture="pathformer",
+            patch_sizes=(4, 8, 12),
+            d_model=64,
+            embedding_dim=64,
+            n_heads=4,
+            num_layers=2,
+            dropout=0.10,
+            feedforward_multiplier=2.0,
+            pooling="attention",
+            use_mask_embedding=True,
+            router_hidden_dim=64,
         ),
         "cls_token_transformer": EncoderOnlyTransformerConfig(
             d_model=64,
@@ -271,6 +338,9 @@ def build_default_experiment_setups(
 ) -> list[dict]:
     architecture_names = [
         "encoder_only",
+        "encoder_only_market_tuples",
+        "patchtst",
+        "pathformer",
         "cls_token_transformer",
         "conv_transformer",
         "tcn_transformer",
@@ -288,7 +358,11 @@ def build_default_experiment_setups(
         {
             "name": architecture_name,
             "architecture": architecture_name,
-            "data_config": build_default_data_config(data_dir),
+            "data_config": (
+                build_market_tuple_data_config(data_dir)
+                if architecture_name == "encoder_only_market_tuples"
+                else build_default_data_config(data_dir)
+            ),
             "model_config": build_default_model_config(architecture_name),
             "training_config": build_default_training_config(architecture_name, device=device),
             "clustering_config": build_default_clustering_config(target_cluster_count=target_cluster_count),
@@ -301,6 +375,7 @@ def build_default_experiment_setups(
 __all__ = [
     "build_architecture_runners",
     "build_default_data_config",
+    "build_market_tuple_data_config",
     "build_default_model_config",
     "build_default_training_config",
     "build_default_clustering_config",

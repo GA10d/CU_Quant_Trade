@@ -10,6 +10,7 @@ from .encoder_only_transformer import (
     compare_experiment_summaries,
     make_windows,
     run_encoder_only_experiment,
+    run_market_tuple_encoder_only_experiment,
 )
 from .advanced_transformer_variants import (
     ConvTransformerConfig,
@@ -19,6 +20,14 @@ from .advanced_transformer_variants import (
     run_mae_transformer_experiment,
     run_tcn_transformer_experiment,
     run_transformer_autoencoder_experiment,
+)
+from .paper_transformer_variants import (
+    PatchTSTBackbone,
+    PatchTSTConfig,
+    PathformerBackbone,
+    PathformerConfig,
+    run_patchtst_experiment,
+    run_pathformer_experiment,
 )
 from .autoencoder_and_clustering_baselines import (
     ClassicalClusteringConfig,
@@ -51,6 +60,17 @@ from .cluster_action_backtest import (
     search_best_cluster_action_mapping,
     summarize_split_dates,
 )
+from .rl_backtest_agent import (
+    QLearningAgentConfig,
+    DiscreteActionBacktestEnv,
+    TabularQLearningAgent,
+    evaluate_model_with_q_learning,
+    load_q_learning_policy,
+    run_q_policy_backtest,
+    save_q_learning_policy,
+    save_rl_ranking_artifacts,
+    train_q_learning_agent,
+)
 
 __all__ = [
     "HMMLEARN_AVAILABLE",
@@ -58,19 +78,27 @@ __all__ = [
     "EncoderOnlyTransformerConfig",
     "ConvTransformerConfig",
     "Seq2SeqTransformerConfig",
+    "PatchTSTConfig",
+    "PathformerConfig",
     "SequenceAutoencoderConfig",
     "WindowVAEConfig",
     "ClassicalClusteringConfig",
     "ActionBacktestConfig",
+    "QLearningAgentConfig",
     "TrainingConfig",
     "ClusteringConfig",
     "HMMReferenceConfig",
     "EncoderOnlyMaskedTransformer",
+    "PatchTSTBackbone",
+    "PathformerBackbone",
     "RecurrentBaselineConfig",
     "RecurrentMaskedAutoencoder",
     "build_sequence_panel",
     "make_windows",
     "run_encoder_only_experiment",
+    "run_market_tuple_encoder_only_experiment",
+    "run_patchtst_experiment",
+    "run_pathformer_experiment",
     "run_cls_token_transformer_experiment",
     "run_conv_transformer_experiment",
     "run_tcn_transformer_experiment",
@@ -95,5 +123,13 @@ __all__ = [
     "build_model_ranking_tables",
     "save_backtest_visualizations",
     "save_evaluation_artifacts",
+    "DiscreteActionBacktestEnv",
+    "TabularQLearningAgent",
+    "run_q_policy_backtest",
+    "train_q_learning_agent",
+    "evaluate_model_with_q_learning",
+    "save_q_learning_policy",
+    "load_q_learning_policy",
+    "save_rl_ranking_artifacts",
     "compare_experiment_summaries",
 ]

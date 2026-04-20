@@ -65,6 +65,10 @@ class SequenceDataConfig:
     include_curve_slope_change: bool = True
     strict_feature_availability: bool = False
     tuple_market_value_field: str = "Close"
+    sequence_feature_mode: str = "returns"
+    tuple_asset_columns: tuple[str, ...] = ("GLD", "HYG", "LQD", "SPY", "TLT", "UUP", "VIX")
+    tuple_market_fields: tuple[str, ...] = ("Close", "High", "Low", "Open", "Volume")
+    tuple_log1p_volume: bool = True
     prefer_saved_hmm_features: bool = True
 
 
@@ -87,7 +91,9 @@ class TrainingConfig:
     num_epochs: int = 20
     learning_rate: float = 1e-3
     weight_decay: float = 0.0
-    train_ratio: float = 0.8
+    train_ratio: float = 0.7
+    validation_ratio: float = 0.2
+    test_ratio: float = 0.1
     early_stopping_patience: int = 5
     min_epochs: int = 5
     random_state: int = 42
@@ -187,10 +193,50 @@ def _coerce_market_frame(
     return numeric_market
 
 
+def _load_raw_market_data(data_config: SequenceDataConfig) -> pd.DataFrame:
+    data_dir = _resolve_data_dir(data_config.data_dir)
+    market_path = data_dir / data_config.market_filename
+    market_data = pd.read_csv(market_path, index_col="Date", parse_dates=True).sort_index()
+    market_data.index.name = "Date"
+    return market_data
+
+
+def load_market_tuple_panels(
+    data_config: SequenceDataConfig,
+    target_index: pd.Index | None = None,
+) -> dict[str, pd.DataFrame]:
+    raw_market_data = _load_raw_market_data(data_config)
+    field_panels: dict[str, pd.DataFrame] = {}
+    for field_name in data_config.tuple_market_fields:
+        panel = _coerce_market_frame(raw_market_data, value_field=field_name)
+        if target_index is not None:
+            common_index = panel.index.intersection(target_index)
+            panel = panel.loc[common_index].copy()
+        panel.index.name = "Date"
+        field_panels[field_name] = panel
+    return field_panels
+
+
 def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    try:
+        torch.use_deterministic_algorithms(True, warn_only=True)
+    except Exception:
+        pass
+
+
+def make_torch_dataloader_generator(seed: int) -> torch.Generator:
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(int(seed))
+    return generator
 
 
 def load_market_and_macro(data_config: SequenceDataConfig) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -219,6 +265,63 @@ def build_sequence_panel(
     macro_data: pd.DataFrame,
     data_config: SequenceDataConfig,
 ) -> tuple[pd.DataFrame, dict]:
+    if data_config.sequence_feature_mode == "market_tuples":
+        tuple_panels = load_market_tuple_panels(data_config, target_index=market_data.index)
+        sequence_features: list[pd.Series] = []
+        used_features: list[str] = []
+        skipped_features: list[str] = []
+
+        available_assets = list(tuple_panels[next(iter(tuple_panels))].columns) if tuple_panels else []
+        tuple_assets = list(data_config.tuple_asset_columns) if data_config.tuple_asset_columns else available_assets
+
+        for asset in tuple_assets:
+            for field_name in data_config.tuple_market_fields:
+                field_panel = tuple_panels.get(field_name)
+                if field_panel is None or asset not in field_panel.columns:
+                    skipped_features.append(f"{asset}_{field_name}")
+                    continue
+
+                series = field_panel[asset].copy()
+                if not series.notna().any():
+                    skipped_features.append(f"{asset}_{field_name}")
+                    continue
+
+                feature_name = f"{asset}_{field_name.lower()}"
+                if field_name == "Volume" and data_config.tuple_log1p_volume:
+                    series = np.log1p(series.clip(lower=0))
+                    feature_name = f"{asset}_log1p_volume"
+
+                sequence_features.append(series.rename(feature_name))
+                used_features.append(feature_name)
+
+        if data_config.strict_feature_availability and skipped_features:
+            missing_text = ", ".join(skipped_features)
+            raise ValueError(f"Missing required tuple market features: {missing_text}")
+
+        if not sequence_features:
+            raise ValueError("No usable tuple-based market features were built from the full market data file.")
+
+        sequence_panel = pd.concat(sequence_features, axis=1).dropna()
+        sequence_panel.index.name = "Date"
+
+        if sequence_panel.empty:
+            raise ValueError(
+                "Tuple-based sequence panel is empty after dropna(). "
+                "Check whether the requested OHLCV tuple fields are available."
+            )
+
+        metadata = {
+            "used_features": used_features,
+            "skipped_features": skipped_features,
+        }
+        return sequence_panel, metadata
+
+    if data_config.sequence_feature_mode != "returns":
+        raise ValueError(
+            f"Unsupported sequence_feature_mode `{data_config.sequence_feature_mode}`. "
+            "Choose `returns` or `market_tuples`."
+        )
+
     sequence_features: list[pd.Series] = []
     used_features: list[str] = []
     skipped_features: list[str] = []
@@ -427,6 +530,56 @@ def resolve_device(device: str) -> torch.device:
     return torch.device(device)
 
 
+def split_ordered_train_random_holdout_indices(
+    n_obs: int,
+    train_ratio: float,
+    validation_ratio: float,
+    test_ratio: float,
+    random_state: int,
+) -> dict[str, np.ndarray]:
+    if n_obs < 3:
+        raise ValueError(f"Need at least 3 observations to split train/validation/test, got {n_obs}.")
+
+    total_ratio = train_ratio + validation_ratio + test_ratio
+    if total_ratio <= 0:
+        raise ValueError("train_ratio + validation_ratio + test_ratio must be positive.")
+
+    normalized_train_ratio = train_ratio / total_ratio
+    normalized_validation_ratio = validation_ratio / total_ratio
+    normalized_test_ratio = test_ratio / total_ratio
+
+    train_count = max(1, int(n_obs * normalized_train_ratio))
+    train_count = min(train_count, n_obs - 2)
+
+    holdout_indices = np.arange(train_count, n_obs, dtype=int)
+    if len(holdout_indices) < 2:
+        raise ValueError(
+            "Need at least 2 holdout observations after the training split to form validation/test sets."
+        )
+
+    holdout_total_ratio = normalized_validation_ratio + normalized_test_ratio
+    if holdout_total_ratio <= 0:
+        raise ValueError("validation_ratio + test_ratio must be positive.")
+
+    validation_share = normalized_validation_ratio / holdout_total_ratio
+    validation_count = int(round(len(holdout_indices) * validation_share))
+    validation_count = max(1, validation_count)
+    validation_count = min(validation_count, len(holdout_indices) - 1)
+
+    rng = np.random.default_rng(random_state)
+    shuffled_holdout = holdout_indices.copy()
+    rng.shuffle(shuffled_holdout)
+
+    validation_indices = np.sort(shuffled_holdout[:validation_count])
+    test_indices = np.sort(shuffled_holdout[validation_count:])
+
+    return {
+        "train": np.arange(train_count, dtype=int),
+        "validation": validation_indices,
+        "test": test_indices,
+    }
+
+
 def train_encoder_only_transformer(
     windows: np.ndarray,
     model_config: EncoderOnlyTransformerConfig,
@@ -434,14 +587,24 @@ def train_encoder_only_transformer(
     window_size: int,
 ) -> tuple[EncoderOnlyMaskedTransformer, pd.DataFrame, torch.Tensor, torch.device]:
     device = resolve_device(training_config.device)
-    split_idx = max(1, int(len(windows) * training_config.train_ratio))
-    split_idx = min(split_idx, len(windows))
+    split_indices = split_ordered_train_random_holdout_indices(
+        n_obs=len(windows),
+        train_ratio=training_config.train_ratio,
+        validation_ratio=training_config.validation_ratio,
+        test_ratio=training_config.test_ratio,
+        random_state=training_config.random_state,
+    )
 
-    train_windows = torch.tensor(windows[:split_idx], dtype=torch.float32)
-    val_windows = torch.tensor(windows[split_idx:], dtype=torch.float32)
+    train_windows = torch.tensor(windows[split_indices["train"]], dtype=torch.float32)
+    val_windows = torch.tensor(windows[split_indices["validation"]], dtype=torch.float32)
     all_windows = torch.tensor(windows, dtype=torch.float32)
 
-    train_loader = DataLoader(TensorDataset(train_windows), batch_size=training_config.batch_size, shuffle=True)
+    train_loader = DataLoader(
+        TensorDataset(train_windows),
+        batch_size=training_config.batch_size,
+        shuffle=True,
+        generator=make_torch_dataloader_generator(training_config.random_state),
+    )
     if len(val_windows) > 0:
         val_masks = sample_mask(val_windows, training_config.mask_ratio)
         val_loader = DataLoader(
@@ -818,6 +981,7 @@ def run_encoder_only_experiment(
     training_config: TrainingConfig | None = None,
     clustering_config: ClusteringConfig | None = None,
     hmm_config: HMMReferenceConfig | None = None,
+    architecture_name: str = "encoder_only",
 ) -> dict:
     data_config = data_config or SequenceDataConfig()
     model_config = model_config or EncoderOnlyTransformerConfig()
@@ -916,7 +1080,7 @@ def run_encoder_only_experiment(
     best_val_loss = float(history_df["val_loss"].min())
     summary = {
         "experiment_name": experiment_name,
-        "architecture": "encoder_only",
+        "architecture": architecture_name,
         "input_dim": int(sequence_panel.shape[1]),
         "window_size": int(data_config.window_size),
         "n_sequence_rows": int(len(sequence_panel)),
@@ -959,6 +1123,34 @@ def run_encoder_only_experiment(
     }
 
 
+def run_market_tuple_encoder_only_experiment(
+    experiment_name: str,
+    data_config: SequenceDataConfig | None = None,
+    model_config: EncoderOnlyTransformerConfig | None = None,
+    training_config: TrainingConfig | None = None,
+    clustering_config: ClusteringConfig | None = None,
+    hmm_config: HMMReferenceConfig | None = None,
+) -> dict:
+    if data_config is None:
+        data_config = SequenceDataConfig(
+            market_filename="market_data_full_adjusted.csv",
+            window_size=60,
+            sequence_feature_mode="market_tuples",
+            include_vix_log_return=False,
+            include_curve_slope_change=False,
+        )
+
+    return run_encoder_only_experiment(
+        experiment_name=experiment_name,
+        data_config=data_config,
+        model_config=model_config,
+        training_config=training_config,
+        clustering_config=clustering_config,
+        hmm_config=hmm_config,
+        architecture_name="encoder_only_market_tuples",
+    )
+
+
 def compare_experiment_summaries(results: list[dict]) -> pd.DataFrame:
     rows = []
     for result in results:
@@ -986,5 +1178,6 @@ __all__ = [
     "build_sequence_panel",
     "make_windows",
     "run_encoder_only_experiment",
+    "run_market_tuple_encoder_only_experiment",
     "compare_experiment_summaries",
 ]

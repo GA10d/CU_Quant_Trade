@@ -1,0 +1,3 @@
+experiment_name,source_experiment,q_table_path
+hmm_baseline__q_learning,hmm_baseline,Final_Project\artifacts\rl_backtest_smoke2\q_tables\hmm_baseline__q_learning_q_table.csv
+kmeans_baseline__q_learning,kmeans_baseline,Final_Project\artifacts\rl_backtest_smoke2\q_tables\kmeans_baseline__q_learning_q_table.csv

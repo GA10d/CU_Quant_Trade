@@ -1,0 +1,22 @@
+{
+  "saved_at": "2026-04-20T05:02:35.987152+00:00",
+  "experiment_name": "pathformer",
+  "summary": {
+    "experiment_name": "pathformer",
+    "architecture": "pathformer",
+    "input_dim": 8,
+    "window_size": 60,
+    "n_sequence_rows": 2834,
+    "n_windows": 2775,
+    "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
+    "skipped_sequence_features": "",
+    "best_epoch": 10,
+    "best_val_loss": 0.7605680028597513,
+    "target_cluster_count": 4,
+    "silhouette": 0.09444639831781387,
+    "ari_vs_hmm": 0.018479192846546186,
+    "nmi_vs_hmm": 0.03408273870558313
+  },
+  "model_state_path": "f:\\Documents\\GitHub\\CU_Quant_Trade\\Final_Project\\track_b\\models\\pathformer__291f02783c6b66ad\\model_state.pt",
+  "device": "cuda"
+}
