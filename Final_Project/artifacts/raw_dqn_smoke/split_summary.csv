@@ -1,0 +1,4 @@
+split,n_windows,start_date,end_date,selection
+train,1943,2015-03-30,2022-12-13,ordered_oldest
+validation,555,2022-12-14,2026-04-13,random_from_holdout
+test,278,2022-12-15,2026-04-06,random_from_holdout

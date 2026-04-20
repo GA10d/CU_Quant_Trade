@@ -1,0 +1,2 @@
+episode,epsilon,train_episode_reward,train_avg_reward,train_avg_loss,validation_n_days,validation_total_return,validation_annual_return,validation_annual_vol,validation_sharpe,validation_max_drawdown,validation_calmar,validation_final_nav,validation_avg_turnover,validation_total_turnover,validation_objective_value
+1,1.0,-0.1617640695858803,-8.329766714000016e-05,0.08327473966096774,555,0.38473963015372226,0.1592811351627137,0.11389477445221102,1.2228931119324926,-0.10000830946901751,1.5926790084583806,138473.96301537222,0.0018018018018018018,1.0,1.2228931119324926

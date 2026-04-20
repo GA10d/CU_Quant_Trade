@@ -699,6 +699,13 @@ def save_evaluation_artifacts(
     combined_ranking.to_csv(output_path / "combined_ranking.csv", index=False)
     if evaluation_results:
         evaluation_results[0]["split_summary"].to_csv(output_path / "split_summary.csv", index=False)
+        split_rows = []
+        for split_name, split_dates in evaluation_results[0]["splits"].items():
+            for split_date in pd.Index(split_dates):
+                split_rows.append({"Date": pd.Timestamp(split_date), "split": split_name})
+        if split_rows:
+            split_dates_frame = pd.DataFrame(split_rows).sort_values(["Date", "split"]).reset_index(drop=True)
+            split_dates_frame.to_csv(output_path / "split_dates.csv", index=False)
 
     search_dir = output_path / "mapping_search"
     backtest_dir = output_path / "backtests"
@@ -792,6 +799,21 @@ def _add_split_boundaries(ax, split_summary: pd.DataFrame, y_min: float, y_max: 
         )
 
 
+def _nav_plot_size(n_series: int) -> tuple[float, float]:
+    n = max(int(n_series), 1)
+    width = min(28.0, max(16.0, 16.0 + 0.55 * max(0, n - 8)))
+    height = min(16.0, max(8.0, 8.0 + 0.22 * max(0, n - 10)))
+    return width, height
+
+
+def _nav_gif_layout(n_series: int) -> tuple[tuple[float, float], list[float]]:
+    n = max(int(n_series), 1)
+    width = min(32.0, max(20.0, 20.0 + 0.7 * max(0, n - 8)))
+    height = min(18.0, max(9.0, 9.0 + 0.26 * max(0, n - 10)))
+    rank_panel_width = min(3.4, max(2.0, 2.0 + 0.08 * max(0, n - 8)))
+    return (width, height), [5.0, rank_panel_width]
+
+
 def save_nav_comparison_png(
     nav_frame: pd.DataFrame,
     output_path: str | Path,
@@ -799,6 +821,7 @@ def save_nav_comparison_png(
     ylabel: str,
     ranking_df: pd.DataFrame | None = None,
     split_summary: pd.DataFrame | None = None,
+    line_colors: dict[str, object] | None = None,
 ) -> None:
     if nav_frame.empty:
         return
@@ -808,10 +831,13 @@ def save_nav_comparison_png(
         ranked = [name for name in ranking_df["experiment_name"] if name in nav_frame.columns]
         ordered_columns = ranked + [name for name in nav_frame.columns if name not in ranked]
 
-    fig, ax = plt.subplots(figsize=(14, 7))
     plot_frame = nav_frame.loc[:, ordered_columns]
+    fig, ax = plt.subplots(figsize=_nav_plot_size(len(plot_frame.columns)))
     for column in plot_frame.columns:
-        ax.plot(plot_frame.index, plot_frame[column], linewidth=1.8, label=column)
+        plot_kwargs = {"linewidth": 1.8, "label": column}
+        if line_colors is not None and column in line_colors:
+            plot_kwargs["color"] = line_colors[column]
+        ax.plot(plot_frame.index, plot_frame[column], **plot_kwargs)
 
     if split_summary is not None and not split_summary.empty:
         valid_values = plot_frame.to_numpy(dtype=float)
@@ -836,6 +862,7 @@ def save_nav_comparison_gif(
     ylabel: str,
     ranking_df: pd.DataFrame | None = None,
     fps: int = 12,
+    line_colors: dict[str, object] | None = None,
 ) -> bool:
     if nav_frame.empty:
         return False
@@ -855,12 +882,18 @@ def save_nav_comparison_gif(
     if len(dates) < 2:
         return False
 
+    figure_size, width_ratios = _nav_gif_layout(len(plot_frame.columns))
     fig, (ax, ax_rank) = plt.subplots(
         ncols=2,
-        figsize=(18, 8),
-        gridspec_kw={"width_ratios": [4.8, 1.8]},
+        figsize=figure_size,
+        gridspec_kw={"width_ratios": width_ratios},
     )
-    lines = {column: ax.plot([], [], linewidth=2.0, label=column)[0] for column in plot_frame.columns}
+    lines = {}
+    for column in plot_frame.columns:
+        plot_kwargs = {"linewidth": 2.0, "label": column}
+        if line_colors is not None and column in line_colors:
+            plot_kwargs["color"] = line_colors[column]
+        lines[column] = ax.plot([], [], **plot_kwargs)[0]
     ax.set_xlim(dates.min(), dates.max())
     valid_values = plot_frame.to_numpy(dtype=float)
     y_min = float(np.nanmin(valid_values))

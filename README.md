@@ -1,280 +1,242 @@
-# Cross-Asset Regime Detection & Portfolio Optimization
+# Cross-Asset Regime Detection and Portfolio Optimization
 
-## Project Overview
+**Language:** English | [中文](#chinese)
 
-This project develops a cross-asset regime detection framework using macroeconomic and financial data, and evaluates whether regime-aware portfolio strategies can outperform static allocation approaches.
+## English
 
-### Research Questions
+### Overview
 
-1. Can we reliably identify latent market regimes using macro-financial data?
-2. Do these regimes correspond to economically meaningful states (e.g., risk-on, risk-off)?
-3. Can regime-conditioned portfolio strategies achieve improved risk-adjusted returns compared to baseline strategies?
+This repository studies **cross-asset market regime detection** and tests whether a regime-aware allocation rule can outperform static portfolios.
 
-## Methodology
+The project currently contains two research tracks:
 
-### Regime Detection
+- **Track A**: interpretable regime detection with a Gaussian HMM on hand-crafted macro-financial features
+- **Track B**: representation learning and benchmarking on rolling windows, followed by portfolio backtests under both cluster-action search and RL policies
 
-The primary approach uses a **Gaussian Hidden Markov Model (HMM)** to identify market regimes. The HMM provides a probabilistic framework for modeling time series with latent states and is well-suited for capturing regime-switching behavior in financial markets.
+### What Is Implemented
 
-**Key Features:**
-- Cross-asset features including returns, volatility, correlations, and macroeconomic indicators
-- BIC-based model selection to determine optimal number of regimes
-- Economic interpretation of regimes (Stress, Transition, Recovery, Risk-On)
-- Transition probability analysis to understand regime dynamics
+- Free-data pipeline built from **Yahoo Finance**, **FRED**, and **Ken French**
+- HMM feature engineering and BIC-based state selection
+- Regime-conditioned portfolio backtest for the HMM track
+- Track B benchmark suite with multiple architectures:
+  - encoder-only Transformer
+  - CLS-token Transformer
+  - Conv/TCN/MAE Transformer variants
+  - PatchTST- and Pathformer-inspired variants
+  - RNN / hybrid / autoencoder baselines
+  - classical clustering baselines
+- Unified benchmark export for:
+  - **CA**: validation-set cluster-to-action search, then fixed mapping on test
+  - **RL**: Q-learning on model states/clusters
+- Combined ranking tables, PNG charts, and GIF animations
 
-### Data Sources
+### Repository Layout
 
-1. **yfinance**: Market prices for equities, bonds, commodities, and volatility
-   - SPY (S&P 500 ETF)
-   - TLT (Long-term Treasury ETF)
-   - GLD (Gold ETF)
-   - UUP (US Dollar ETF)
-   - HYG (High Yield Credit ETF)
-   - LQD (Investment Grade Credit ETF)
-   - VIX (Volatility Index)
-
-2. **FRED**: Macroeconomic indicators
-   - GDP, Unemployment Rate, Federal Funds Rate
-   - Treasury yields (2Y, 10Y, 3M)
-   - Yield curve spreads
-   - CPI, Industrial Production, Employment
-
-3. **Ken French Data Library**: Factor data
-   - Fama-French 5-factor model
-   - Momentum factor
-
-### Portfolio Strategies
-
-Four strategies are implemented and compared:
-
-1. **60/40 Static Allocation**: Traditional 60% equities, 40% bonds
-2. **Equal Weight**: Equal allocation across SPY, TLT, and GLD
-3. **Regime-Conditioned**: Dynamic allocation based on detected regimes
-   - Stress: 20% SPY, 50% TLT, 30% GLD (flight to safety)
-   - Transition: 30% SPY, 40% TLT, 30% GLD (balanced)
-   - Recovery: 50% SPY, 30% TLT, 20% GLD (risk-on)
-   - Risk-On: 70% SPY, 20% TLT, 10% GLD (strong risk-on)
-4. **Volatility Targeting**: SPY with volatility scaling to target 15% annual volatility
-
-## Project Structure
-
-```
+```text
 .
-├── data_collection.py          # Data collection from multiple sources
-├── feature_engineering.py      # Feature engineering for regime detection
-├── hmm_regime_detection.py     # HMM implementation and regime detection
-├── portfolio_strategy.py       # Portfolio strategy implementation and backtesting
-├── README.md                   # This file
-├── data/                       # Data directory
-│   ├── market_data.csv
-│   ├── macro_data.csv
-│   ├── factor_data.csv
-│   ├── unified_data.csv
-│   ├── hmm_features.csv
-│   ├── hmm_features_normalized.csv
-│   └── hmm_regimes.csv
-└── outputs/                    # Output directory
+|-- feature_engineering.py
+|-- hmm_regime_detection.py
+|-- portfolio_strategy.py
+|-- outputs/
+|   |-- hmm_regime_detection.png
+|   |-- strategy_comparison.csv
+|   `-- strategy_comparison.png
+`-- Final_Project/
+    |-- data/
+    `-- track_b/
+        |-- architecture_comparison.ipynb
+        |-- experiment_presets.py
+        |-- cluster_action_backtest.py
+        |-- rl_backtest_agent.py
+        |-- run_cluster_action_rankings.py
+        |-- run_rl_backtest_rankings.py
+        |-- plot_combined_nav_comparison.py
+        `-- results/
 ```
 
-## Installation
+### Data
 
-### Requirements
+The current experiments use:
 
-```bash
-pip install numpy pandas scipy scikit-learn yfinance pandas-datareader hmmlearn matplotlib
-```
+- **Yahoo Finance** market series: `SPY`, `TLT`, `GLD`, `UUP`, `HYG`, `LQD`, `^VIX`
+- **FRED** macro series: treasury yields and related curve features
+- **Ken French** factor data for auxiliary analysis
 
-### Usage
+Core local datasets live under [Final_Project/data](Final_Project/data).
 
-#### 1. Data Collection
+### Track A: HMM Results
 
-```python
-from data_collection import DataCollector
+Track A uses engineered cross-asset features such as returns, rolling volatility, rolling correlations, `VIX` level, and curve slope to fit a Gaussian HMM and label regimes as `Stress`, `Transition`, `Recovery`, and `Risk-On`.
 
-# Initialize collector
-collector = DataCollector(start_date="2015-01-01")
+#### Regime Detection Snapshot
 
-# Download all data
-collector.download_market_data()
-collector.download_fred_data()
-collector.download_ken_french_data()
+![Track A HMM Regime Detection](outputs/hmm_regime_detection.png)
 
-# Create unified dataset
-unified = collector.create_unified_dataset()
+#### Strategy Comparison
 
-# Save data
-collector.save_data()
-```
+![Track A Strategy Comparison](outputs/strategy_comparison.png)
 
-#### 2. Feature Engineering
+Current strategy metrics from [outputs/strategy_comparison.csv](outputs/strategy_comparison.csv):
 
-```python
-from feature_engineering import FeatureEngineer
-import pandas as pd
+| Strategy | Annual Return | Annual Volatility | Sharpe | Max Drawdown |
+| --- | ---: | ---: | ---: | ---: |
+| Regime-Conditioned | 10.52% | 9.75% | **0.874** | -25.88% |
+| Equal Weight | 9.19% | 9.71% | 0.741 | -22.63% |
+| Vol Targeting | 11.70% | 15.97% | 0.607 | -28.50% |
+| 60/40 | 8.15% | 11.27% | 0.545 | -27.24% |
 
-# Load data
-market_data = pd.read_csv("data/market_data.csv", index_col=0, parse_dates=True)
-macro_data = pd.read_csv("data/macro_data.csv", index_col=0, parse_dates=True)
+### Track B: Combined Benchmark Visuals
 
-# Create feature engineer
-engineer = FeatureEngineer(price_data=market_data, macro_data=macro_data)
+Track B compares **CA** and **RL** policy families:
 
-# Build HMM features
-features = engineer.build_hmm_features()
+- **CA** uses the model's clusters/states, searches the best cluster-to-action mapping on validation, then evaluates on test
+- **RL** uses Q-learning on top of model states/clusters and backtests the learned policy
 
-# Normalize features
-normalized, scaler = engineer.normalize_features(method="standard")
-```
+#### Full-Period Family-Palette Animation
 
-#### 3. Regime Detection
+- Red shades: **CA**
+- Blue shades: **RL**
 
-```python
-from hmm_regime_detection import HMMRegimeDetector
-import pandas as pd
+![Track B Full-Period Family Palette GIF](Final_Project/track_b/results/combined_nav_rankings_k4/plots/family_palette_combined_full_period_nav_comparison.gif)
 
-# Load features
-features = pd.read_csv("data/hmm_features.csv", index_col=0, parse_dates=True)
+#### Test-Only Family-Palette Animation
 
-# Select optimal number of states
-detector = HMMRegimeDetector(random_state=42)
-optimal_n_states, bic_summary = detector.select_optimal_states(
-    features, 
-    state_candidates=[2, 3, 4],
-    n_restarts=5
-)
+![Track B Test-Only Family Palette GIF](Final_Project/track_b/results/combined_nav_rankings_k4/plots/family_palette_combined_test_nav_comparison.gif)
 
-# Fit final model
-final_detector = HMMRegimeDetector(
-    n_states=optimal_n_states,
-    covariance_type="diag",
-    n_iter=1000,
-    random_state=42
-)
-final_detector.fit(features, n_restarts=10)
+#### Static Full-Period Comparison
 
-# Label regimes
-final_detector.label_regimes(features)
+![Track B Full-Period Family Palette PNG](Final_Project/track_b/results/combined_nav_rankings_k4/plots/family_palette_combined_full_period_nav_comparison.png)
 
-# Plot results
-market_data = pd.read_csv("data/market_data.csv", index_col=0, parse_dates=True)
-final_detector.plot_regimes(features, market_data)
+### Overall Rank List
 
-# Save model
-final_detector.save_model()
-```
+Current combined leaderboard (`K=4`) from [overall_model_leaderboard.csv](Final_Project/track_b/results/combined_nav_rankings_k4/overall_model_leaderboard.csv):
 
-#### 4. Portfolio Strategy
+| Overall Rank | Model | Family | Validation Rank | Test Rank | Avg Rank | Validation Sharpe | Test Sharpe |
+| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | `RL:encoder_only__q_learning` | RL | 1 | 1 | 1.0 | 1.744 | **1.403** |
+| 2 | `CA:tcn_transformer` | CA | 2 | 3 | 2.5 | 1.676 | 1.140 |
+| 3 | `RL:tcn_transformer__q_learning` | RL | 3 | 4 | 3.5 | 1.553 | 1.128 |
+| 4 | `CA:transformer_autoencoder` | CA | 8 | 2 | 5.0 | 1.442 | 1.173 |
+| 5 | `CA:mae_transformer` | CA | 4 | 11 | 7.5 | 1.523 | 0.917 |
+| 6 | `RL:conv_transformer__q_learning` | RL | 6 | 12 | 9.0 | 1.463 | 0.914 |
+| 7 | `CA:pure_rnn` | CA | 13 | 7 | 10.0 | 1.380 | 1.026 |
+| 8 | `CA:conv_transformer` | CA | 7 | 13 | 10.0 | 1.445 | 0.881 |
+| 9 | `CA:cls_token_transformer` | CA | 12 | 10 | 11.0 | 1.382 | 0.932 |
+| 10 | `RL:pathformer__q_learning` | RL | 15 | 9 | 12.0 | 1.376 | 0.951 |
 
-```python
-from portfolio_strategy import (
-    StaticAllocation, 
-    RegimeConditionedStrategy,
-    compare_strategies,
-    plot_strategy_comparison
-)
-import pandas as pd
+Full ranking files:
 
-# Load data
-market_data = pd.read_csv("data/market_data.csv", index_col=0, parse_dates=True)
-regimes = pd.read_csv("data/hmm_regimes.csv", index_col=0, parse_dates=True)
+- [Combined validation ranking](Final_Project/track_b/results/combined_nav_rankings_k4/combined_validation_ranking.csv)
+- [Combined test ranking](Final_Project/track_b/results/combined_nav_rankings_k4/combined_test_ranking.csv)
+- [Overall leaderboard](Final_Project/track_b/results/combined_nav_rankings_k4/overall_model_leaderboard.csv)
 
-# Calculate returns
-returns = market_data.pct_change().dropna()
+### How to Reproduce
 
-# Define regime-conditioned strategy
-regime_weights = {
-    'Stress': {'SPY': 0.2, 'TLT': 0.5, 'GLD': 0.3},
-    'Transition': {'SPY': 0.3, 'TLT': 0.4, 'GLD': 0.3},
-    'Recovery': {'SPY': 0.5, 'TLT': 0.3, 'GLD': 0.2},
-    'Risk-On': {'SPY': 0.7, 'TLT': 0.2, 'GLD': 0.1}
-}
+For Track B, the main experiment notebook is:
 
-regime_strategy = RegimeConditionedStrategy(
-    assets=['SPY', 'TLT', 'GLD'],
-    regime_weights=regime_weights
-)
-regime_strategy.set_regimes(regimes['regime'])
+- [Final_Project/track_b/architecture_comparison.ipynb](Final_Project/track_b/architecture_comparison.ipynb)
 
-# Backtest and compare
-results = {
-    '60/40': returns_60_40,
-    'Equal Weight': returns_equal_weight,
-    'Regime-Conditioned': returns_regime,
-    'Vol Targeting': returns_vol_target
-}
+Generated benchmark outputs are saved under:
 
-comparison = compare_strategies(results)
-print(comparison)
+- [CA results](Final_Project/track_b/results/cluster_action_rankings_k4)
+- [RL results](Final_Project/track_b/results/rl_backtest_rankings_k4)
+- [Combined results](Final_Project/track_b/results/combined_nav_rankings_k4)
 
-plot_strategy_comparison(results)
-```
+---
 
-## Key Results
+<details>
+<summary><strong>切换到中文版</strong></summary>
 
-### Regime Detection
+<a id="chinese"></a>
 
-The HMM identified **4 distinct market regimes**:
+## 中文版
 
-1. **Stress** (Risk Score: -3.13)
-   - High volatility, low returns
-   - Flight to safety behavior
-   - Average duration: 63 days
+### 项目简介
 
-2. **Transition** (Risk Score: 0.12)
-   - Moderate volatility
-   - Mixed market signals
-   - Average duration: 1,011 days (longest)
+这个项目研究的是 **跨资产市场状态识别** 与 **状态感知型资产配置**：
 
-3. **Recovery** (Risk Score: 3.21)
-   - Improving conditions
-   - Moderate risk-on behavior
-   - Average duration: 78 days
+- **Track A**：用手工构造的宏观金融特征做 Gaussian HMM，识别 `Stress / Transition / Recovery / Risk-On`
+- **Track B**：用多种时序模型学习窗口表示，再做回测比较
 
-4. **Risk-On** (Risk Score: 3.90)
-   - Low volatility, strong returns
-   - Bull market conditions
-   - Average duration: 67 days
+当前仓库已经实现：
 
-### Portfolio Performance
+- 免费数据管线：Yahoo Finance / FRED / Ken French
+- HMM 特征工程与状态选择
+- Track A 的状态识别与组合回测
+- Track B 的多模型基准比较
+- 两类回测家族：
+  - **CA**：先在 validation 搜索 `cluster -> action` 最优映射，再到 test 固定评估
+  - **RL**：在模型状态/聚类结果上训练 Q-learning 策略
+- 总榜单、PNG 图、GIF 动图输出
 
-| Strategy | Annual Return | Volatility | Sharpe Ratio | Max Drawdown |
-|----------|--------------|------------|--------------|--------------|
-| Regime-Conditioned | 10.52% | 9.75% | **0.87** | -25.9% |
-| Vol Targeting | 11.70% | 15.97% | 0.61 | -28.5% |
-| Equal Weight | 9.19% | 9.71% | 0.75 | -22.6% |
-| 60/40 | 8.15% | 11.27% | 0.53 | -27.2% |
+### Track A 结果
 
-**Key Findings:**
-- The **Regime-Conditioned strategy** achieved the highest Sharpe ratio (0.87)
-- It provided better risk-adjusted returns than all static allocation strategies
-- Volatility targeting had the highest returns but with significantly higher volatility
-- All strategies outperformed the traditional 60/40 portfolio
+#### HMM 状态识别图
 
-## Extensions
+![Track A HMM Regime Detection](outputs/hmm_regime_detection.png)
 
-### Transformer-Based Representation Learning (Optional)
+#### 策略对比图
 
-As an extension, a transformer encoder can be used to learn temporal representations of market data:
+![Track A Strategy Comparison](outputs/strategy_comparison.png)
 
-1. Rolling windows of market data (60-day sequences) are mapped into low-dimensional embeddings
-2. These embeddings capture temporal patterns in a data-driven manner
-3. Clustering on embeddings can identify regimes
-4. Results can be compared with HMM-derived regimes for consistency
+对应 [outputs/strategy_comparison.csv](outputs/strategy_comparison.csv) 的核心结果：
 
-The existing `track_b_pipeline.py` in the project provides an implementation of this approach.
+| 策略 | 年化收益 | 年化波动 | Sharpe | 最大回撤 |
+| --- | ---: | ---: | ---: | ---: |
+| Regime-Conditioned | 10.52% | 9.75% | **0.874** | -25.88% |
+| Equal Weight | 9.19% | 9.71% | 0.741 | -22.63% |
+| Vol Targeting | 11.70% | 15.97% | 0.607 | -28.50% |
+| 60/40 | 8.15% | 11.27% | 0.545 | -27.24% |
 
-## References
+### Track B 合并回测图
 
-1. Hamilton, J. D. (1989). A new approach to the economic analysis of nonstationary time series and the business cycle. *Econometrica*, 57(2), 357-384.
+说明：
 
-2. Fama, E. F., & French, K. R. (2015). A five-factor asset pricing model. *Journal of Financial Economics*, 116(1), 1-22.
+- 红色系：**CA**
+- 蓝色系：**RL**
 
-3. Ang, A., & Bekaert, G. (2002). International asset allocation with regime shifts. *Review of Financial Studies*, 15(4), 1137-1187.
+#### Full-period 动图
 
-## License
+![Track B Full-Period Family Palette GIF](Final_Project/track_b/results/combined_nav_rankings_k4/plots/family_palette_combined_full_period_nav_comparison.gif)
 
-This project is for educational and research purposes.
+#### Test-only 动图
 
-## Contact
+![Track B Test-Only Family Palette GIF](Final_Project/track_b/results/combined_nav_rankings_k4/plots/family_palette_combined_test_nav_comparison.gif)
 
-For questions or collaboration, please contact the project team.
+#### Full-period 静态图
+
+![Track B Full-Period Family Palette PNG](Final_Project/track_b/results/combined_nav_rankings_k4/plots/family_palette_combined_full_period_nav_comparison.png)
+
+### 总榜单
+
+完整榜单见：
+
+- [overall_model_leaderboard.csv](Final_Project/track_b/results/combined_nav_rankings_k4/overall_model_leaderboard.csv)
+
+当前前 10 名如下：
+
+| 总排名 | 模型 | 家族 | Validation Rank | Test Rank | 平均排名 | Validation Sharpe | Test Sharpe |
+| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | `RL:encoder_only__q_learning` | RL | 1 | 1 | 1.0 | 1.744 | **1.403** |
+| 2 | `CA:tcn_transformer` | CA | 2 | 3 | 2.5 | 1.676 | 1.140 |
+| 3 | `RL:tcn_transformer__q_learning` | RL | 3 | 4 | 3.5 | 1.553 | 1.128 |
+| 4 | `CA:transformer_autoencoder` | CA | 8 | 2 | 5.0 | 1.442 | 1.173 |
+| 5 | `CA:mae_transformer` | CA | 4 | 11 | 7.5 | 1.523 | 0.917 |
+| 6 | `RL:conv_transformer__q_learning` | RL | 6 | 12 | 9.0 | 1.463 | 0.914 |
+| 7 | `CA:pure_rnn` | CA | 13 | 7 | 10.0 | 1.380 | 1.026 |
+| 8 | `CA:conv_transformer` | CA | 7 | 13 | 10.0 | 1.445 | 0.881 |
+| 9 | `CA:cls_token_transformer` | CA | 12 | 10 | 11.0 | 1.382 | 0.932 |
+| 10 | `RL:pathformer__q_learning` | RL | 15 | 9 | 12.0 | 1.376 | 0.951 |
+
+### 主要入口
+
+- 主 notebook：
+  [Final_Project/track_b/architecture_comparison.ipynb](Final_Project/track_b/architecture_comparison.ipynb)
+- CA 结果目录：
+  [cluster_action_rankings_k4](Final_Project/track_b/results/cluster_action_rankings_k4)
+- RL 结果目录：
+  [rl_backtest_rankings_k4](Final_Project/track_b/results/rl_backtest_rankings_k4)
+- 合并结果目录：
+  [combined_nav_rankings_k4](Final_Project/track_b/results/combined_nav_rankings_k4)
+
+</details>
