@@ -1,0 +1,106 @@
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>experiment_name</th>
+      <th>architecture</th>
+      <th>input_dim</th>
+      <th>window_size</th>
+      <th>n_sequence_rows</th>
+      <th>n_windows</th>
+      <th>used_sequence_features</th>
+      <th>skipped_sequence_features</th>
+      <th>best_epoch</th>
+      <th>best_val_loss</th>
+      <th>target_cluster_count</th>
+      <th>silhouette</th>
+      <th>ari_vs_hmm</th>
+      <th>nmi_vs_hmm</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>encoder_only_wider</td>
+      <td>encoder_only</td>
+      <td>8</td>
+      <td>60</td>
+      <td>2834</td>
+      <td>2775</td>
+      <td>SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, L...</td>
+      <td></td>
+      <td>12</td>
+      <td>0.622998</td>
+      <td>4</td>
+      <td>0.216547</td>
+      <td>0.046995</td>
+      <td>0.100479</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>encoder_only_small</td>
+      <td>encoder_only</td>
+      <td>8</td>
+      <td>60</td>
+      <td>2834</td>
+      <td>2775</td>
+      <td>SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, L...</td>
+      <td></td>
+      <td>19</td>
+      <td>0.615727</td>
+      <td>4</td>
+      <td>0.231047</td>
+      <td>0.037364</td>
+      <td>0.084345</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>rnn_lstm_hybrid_baseline</td>
+      <td>rnn_lstm_hybrid</td>
+      <td>8</td>
+      <td>60</td>
+      <td>2834</td>
+      <td>2775</td>
+      <td>SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, L...</td>
+      <td></td>
+      <td>6</td>
+      <td>0.640009</td>
+      <td>4</td>
+      <td>0.175749</td>
+      <td>0.029005</td>
+      <td>0.081020</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>pure_rnn_baseline</td>
+      <td>pure_rnn</td>
+      <td>8</td>
+      <td>60</td>
+      <td>2834</td>
+      <td>2775</td>
+      <td>SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, L...</td>
+      <td></td>
+      <td>9</td>
+      <td>0.637411</td>
+      <td>4</td>
+      <td>0.213243</td>
+      <td>0.002735</td>
+      <td>0.035061</td>
+    </tr>
+  </tbody>
+</table>
+</div>

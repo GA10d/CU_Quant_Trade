@@ -64,6 +64,8 @@ class SequenceDataConfig:
     include_vix_log_return: bool = True
     include_curve_slope_change: bool = True
     strict_feature_availability: bool = False
+    tuple_market_value_field: str = "Close"
+    prefer_saved_hmm_features: bool = True
 
 
 @dataclass
@@ -114,6 +116,77 @@ def _resolve_data_dir(data_dir: str | Path) -> Path:
     return Path(data_dir).resolve()
 
 
+def _coerce_numeric_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    numeric_frame = frame.copy()
+    for column in numeric_frame.columns:
+        numeric_frame[column] = pd.to_numeric(numeric_frame[column], errors="coerce")
+    return numeric_frame
+
+
+def _extract_tuple_field_value(value: object, position: int) -> float:
+    if pd.isna(value):
+        return np.nan
+
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return float(value)
+
+    text = str(value).strip()
+    if not text:
+        return np.nan
+
+    if not (text.startswith("(") and text.endswith(")")):
+        try:
+            return float(text)
+        except ValueError:
+            return np.nan
+
+    parts = [part.strip() for part in text[1:-1].split(",")]
+    if position >= len(parts):
+        return np.nan
+
+    token = parts[position]
+    if not token or token.lower() == "null":
+        return np.nan
+
+    try:
+        return float(token)
+    except ValueError:
+        return np.nan
+
+
+def _coerce_market_frame(
+    market_data: pd.DataFrame,
+    value_field: str,
+) -> pd.DataFrame:
+    field_positions = {"Close": 0, "High": 1, "Low": 2, "Open": 3, "Volume": 4}
+    if value_field not in field_positions:
+        raise ValueError(
+            f"Unsupported tuple_market_value_field `{value_field}`. "
+            f"Choose one of: {', '.join(field_positions)}."
+        )
+
+    position = field_positions[value_field]
+    numeric_market = market_data.copy()
+
+    for column in numeric_market.columns:
+        series = numeric_market[column]
+        sample = series.dropna().head(1)
+        if sample.empty:
+            numeric_market[column] = pd.to_numeric(series, errors="coerce")
+            continue
+
+        first_value = sample.iloc[0]
+        if isinstance(first_value, str) and first_value.strip().startswith("("):
+            numeric_market[column] = series.map(lambda value: _extract_tuple_field_value(value, position))
+        else:
+            numeric_market[column] = pd.to_numeric(series, errors="coerce")
+
+    if "^VIX" in numeric_market.columns and "VIX" not in numeric_market.columns:
+        numeric_market = numeric_market.rename(columns={"^VIX": "VIX"})
+
+    return numeric_market
+
+
 def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -127,6 +200,9 @@ def load_market_and_macro(data_config: SequenceDataConfig) -> tuple[pd.DataFrame
 
     market_data = pd.read_csv(market_path, index_col="Date", parse_dates=True).sort_index()
     macro_data = pd.read_csv(macro_path, index_col="Date", parse_dates=True).sort_index()
+
+    market_data = _coerce_market_frame(market_data, value_field=data_config.tuple_market_value_field)
+    macro_data = _coerce_numeric_frame(macro_data)
 
     common_index = market_data.index.intersection(macro_data.index)
     market_data = market_data.loc[common_index].copy()
@@ -233,17 +309,30 @@ class EncoderOnlyMaskedTransformer(nn.Module):
         max_len: int,
     ):
         super().__init__()
-        if model_config.pooling not in {"attention", "mean", "last"}:
-            raise ValueError("pooling must be one of: attention, mean, last")
+        if model_config.pooling not in {"attention", "mean", "last", "cls"}:
+            raise ValueError("pooling must be one of: attention, mean, last, cls")
+        if model_config.d_model % model_config.n_heads != 0:
+            raise ValueError(
+                "Invalid encoder_only configuration: "
+                f"d_model={model_config.d_model} must be divisible by "
+                f"n_heads={model_config.n_heads}."
+            )
 
         feedforward_dim = int(model_config.d_model * model_config.feedforward_multiplier)
         self.pooling = model_config.pooling
         self.use_mask_embedding = model_config.use_mask_embedding
+        self.use_cls_token = model_config.pooling == "cls"
 
         self.input_norm = nn.LayerNorm(input_dim)
         self.input_proj = nn.Linear(input_dim, model_config.d_model)
         self.mask_proj = nn.Linear(input_dim, model_config.d_model, bias=False)
-        self.pos_encoder = SinusoidalPositionalEncoding(d_model=model_config.d_model, max_len=max_len)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, model_config.d_model)) if self.use_cls_token else None
+        if self.cls_token is not None:
+            nn.init.normal_(self.cls_token, mean=0.0, std=0.02)
+        self.pos_encoder = SinusoidalPositionalEncoding(
+            d_model=model_config.d_model,
+            max_len=max_len + (1 if self.use_cls_token else 0),
+        )
         self.pos_dropout = nn.Dropout(model_config.dropout)
 
         encoder_layer = nn.TransformerEncoderLayer(
@@ -279,6 +368,8 @@ class EncoderOnlyMaskedTransformer(nn.Module):
         )
 
     def pool_hidden(self, hidden: torch.Tensor) -> torch.Tensor:
+        if self.pooling == "cls":
+            return hidden[:, 0, :]
         if self.pooling == "attention":
             assert self.pool_score is not None
             weights = torch.softmax(self.pool_score(hidden), dim=1)
@@ -292,9 +383,14 @@ class EncoderOnlyMaskedTransformer(nn.Module):
         hidden = self.input_proj(normalized_x)
         if mask is not None and self.use_mask_embedding:
             hidden = hidden + self.mask_proj(mask.float())
+        if self.use_cls_token:
+            assert self.cls_token is not None
+            cls_token = self.cls_token.expand(hidden.size(0), -1, -1)
+            hidden = torch.cat([cls_token, hidden], dim=1)
         hidden = self.pos_dropout(self.pos_encoder(hidden))
         hidden = self.encoder(hidden)
-        reconstruction = self.reconstruct_head(hidden)
+        reconstruction_hidden = hidden[:, 1:, :] if self.use_cls_token else hidden
+        reconstruction = self.reconstruct_head(reconstruction_hidden)
         pooled = self.pool_hidden(hidden)
         embedding = self.embedding_head(pooled)
         return reconstruction, embedding
@@ -587,7 +683,13 @@ def load_hmm_features(
 ) -> pd.DataFrame:
     data_dir = _resolve_data_dir(data_config.data_dir)
     hmm_path = data_dir / data_config.hmm_features_filename
-    if hmm_path.exists():
+    use_saved_hmm_features = (
+        data_config.prefer_saved_hmm_features
+        and data_config.market_filename == "market_data.csv"
+        and hmm_path.exists()
+    )
+
+    if use_saved_hmm_features:
         hmm_features = pd.read_csv(hmm_path, index_col="Date", parse_dates=True).sort_index()
         hmm_features.index.name = "Date"
         return hmm_features

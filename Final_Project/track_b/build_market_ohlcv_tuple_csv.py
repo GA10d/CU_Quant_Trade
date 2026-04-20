@@ -6,9 +6,10 @@ import pandas as pd
 import yfinance as yf
 
 
-PROJECT_DIR = Path(__file__).resolve().parent
+TRACK_B_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = TRACK_B_DIR.parent
 DATA_DIR = PROJECT_DIR / "data"
-OUTPUT_PATH = DATA_DIR / "market_data_ohlcv_tuple.csv"
+OUTPUT_PATH = DATA_DIR / "market_data_full.csv"
 CACHE_DIR = PROJECT_DIR / ".yfinance_cache"
 
 TICKERS = ["GLD", "HYG", "LQD", "SPY", "TLT", "UUP", "^VIX"]
@@ -29,7 +30,7 @@ def format_tuple_cell(row: pd.Series) -> str:
     return "(" + ", ".join(values) + ")"
 
 
-def build_tuple_csv() -> Path:
+def download_ohlcv_tuple_frame(auto_adjust: bool) -> pd.DataFrame:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     yf.set_tz_cache_location(str(CACHE_DIR))
@@ -37,7 +38,7 @@ def build_tuple_csv() -> Path:
     raw = yf.download(
         tickers=TICKERS,
         start=START_DATE,
-        auto_adjust=False,
+        auto_adjust=auto_adjust,
         progress=False,
         group_by="column",
     )
@@ -56,8 +57,13 @@ def build_tuple_csv() -> Path:
             ticker_frame[field] = raw[field][ticker]
         tuple_df[ticker] = ticker_frame.apply(format_tuple_cell, axis=1)
 
-    tuple_df.to_csv(OUTPUT_PATH)
-    return OUTPUT_PATH
+    return tuple_df
+
+
+def build_tuple_csv(output_path: Path = OUTPUT_PATH, auto_adjust: bool = False) -> Path:
+    tuple_df = download_ohlcv_tuple_frame(auto_adjust=auto_adjust)
+    tuple_df.to_csv(output_path)
+    return output_path
 
 
 if __name__ == "__main__":
