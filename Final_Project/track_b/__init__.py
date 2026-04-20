@@ -37,6 +37,20 @@ from .rnn_baselines import (
     run_recurrent_experiment,
     run_rnn_lstm_hybrid_experiment,
 )
+from .cluster_action_backtest import (
+    ActionBacktestConfig,
+    build_hmm_baseline_experiment_result,
+    build_default_action_library,
+    build_model_ranking_tables,
+    calculate_backtest_metrics,
+    evaluate_model_cluster_actions,
+    load_tradable_returns,
+    run_action_mapping_backtest,
+    save_backtest_visualizations,
+    save_evaluation_artifacts,
+    search_best_cluster_action_mapping,
+    summarize_split_dates,
+)
 
 __all__ = [
     "HMMLEARN_AVAILABLE",
@@ -47,6 +61,7 @@ __all__ = [
     "SequenceAutoencoderConfig",
     "WindowVAEConfig",
     "ClassicalClusteringConfig",
+    "ActionBacktestConfig",
     "TrainingConfig",
     "ClusteringConfig",
     "HMMReferenceConfig",
@@ -69,5 +84,16 @@ __all__ = [
     "run_vae_experiment",
     "run_kmeans_baseline_experiment",
     "run_pca_kmeans_experiment",
+    "build_hmm_baseline_experiment_result",
+    "build_default_action_library",
+    "load_tradable_returns",
+    "summarize_split_dates",
+    "run_action_mapping_backtest",
+    "calculate_backtest_metrics",
+    "search_best_cluster_action_mapping",
+    "evaluate_model_cluster_actions",
+    "build_model_ranking_tables",
+    "save_backtest_visualizations",
+    "save_evaluation_artifacts",
     "compare_experiment_summaries",
 ]

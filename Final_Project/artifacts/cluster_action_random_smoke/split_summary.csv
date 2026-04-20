@@ -1,0 +1,4 @@
+split,n_windows,start_date,end_date
+train,1943,2015-03-31,2022-12-14
+validation,416,2022-12-15,2024-08-13
+test,416,2024-08-14,2026-04-13

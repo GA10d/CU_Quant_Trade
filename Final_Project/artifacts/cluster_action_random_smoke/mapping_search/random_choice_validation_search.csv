@@ -1,0 +1,2 @@
+mapping,objective_value,validation_n_days,validation_total_return,validation_annual_return,validation_annual_vol,validation_sharpe,validation_max_drawdown,validation_calmar,validation_final_nav,validation_avg_turnover,validation_total_turnover
+random_daily_choice(seed=42),-0.29548975767065094,416,-0.018273042492775726,-0.01110945953025777,0.10528100796282751,-0.29548975767065094,-0.1689672584825559,-0.06574918496061594,98172.69575072243,0.41298076923076926,171.8
