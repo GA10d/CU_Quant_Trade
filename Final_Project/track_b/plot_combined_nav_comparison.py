@@ -31,6 +31,9 @@ def _load_rankings(result_dir: Path, source_family: str) -> tuple[pd.DataFrame, 
     validation_ranking = pd.read_csv(_require_file(result_dir / "validation_ranking.csv"))
     test_ranking = pd.read_csv(_require_file(result_dir / "test_ranking.csv"))
     split_summary = pd.read_csv(_require_file(result_dir / "split_summary.csv"))
+    for column in ("start_date", "end_date"):
+        if column in split_summary.columns:
+            split_summary[column] = pd.to_datetime(split_summary[column], errors="coerce")
     split_dates_path = result_dir / "split_dates.csv"
     split_dates = None
     if split_dates_path.exists():

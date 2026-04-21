@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-04-20T05:03:42.068160+00:00",
+  "saved_at": "2026-04-20T15:16:11.604038+00:00",
   "experiment_name": "rnn_lstm_hybrid",
   "summary": {
     "experiment_name": "rnn_lstm_hybrid",
@@ -7,15 +7,15 @@
     "input_dim": 8,
     "window_size": 60,
     "n_sequence_rows": 2834,
-    "n_windows": 2775,
+    "n_windows": 2657,
     "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
     "skipped_sequence_features": "",
-    "best_epoch": 7,
-    "best_val_loss": 0.7216047743956248,
+    "best_epoch": 5,
+    "best_val_loss": 0.72612364590168,
     "target_cluster_count": 4,
-    "silhouette": 0.22069057822227478,
-    "ari_vs_hmm": 0.05127682102230308,
-    "nmi_vs_hmm": 0.13604847464892494
+    "silhouette": 0.1909458190202713,
+    "ari_vs_hmm": 0.11036141817483652,
+    "nmi_vs_hmm": 0.18770677944678735
   },
   "model_state_path": "f:\\Documents\\GitHub\\CU_Quant_Trade\\Final_Project\\track_b\\models\\rnn_lstm_hybrid__e4c0c3f54581134d\\model_state.pt",
   "device": "cuda"

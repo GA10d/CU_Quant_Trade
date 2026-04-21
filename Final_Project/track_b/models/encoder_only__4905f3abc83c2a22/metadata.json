@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-04-20T05:01:22.073894+00:00",
+  "saved_at": "2026-04-20T15:12:05.816658+00:00",
   "experiment_name": "encoder_only",
   "summary": {
     "experiment_name": "encoder_only",
@@ -7,15 +7,15 @@
     "input_dim": 8,
     "window_size": 60,
     "n_sequence_rows": 2834,
-    "n_windows": 2775,
+    "n_windows": 2657,
     "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
     "skipped_sequence_features": "",
-    "best_epoch": 35,
-    "best_val_loss": 0.6832326584392123,
+    "best_epoch": 17,
+    "best_val_loss": 0.6867784932255745,
     "target_cluster_count": 4,
-    "silhouette": 0.21670706570148468,
-    "ari_vs_hmm": 0.08791856926669209,
-    "nmi_vs_hmm": 0.14336235090741686
+    "silhouette": 0.22968509793281555,
+    "ari_vs_hmm": 0.04291790784619489,
+    "nmi_vs_hmm": 0.10512227402321726
   },
   "model_state_path": "f:\\Documents\\GitHub\\CU_Quant_Trade\\Final_Project\\track_b\\models\\encoder_only__4905f3abc83c2a22\\model_state.pt",
   "device": "cuda"

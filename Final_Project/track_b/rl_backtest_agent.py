@@ -408,13 +408,20 @@ def evaluate_model_with_q_learning(
         name="cluster",
         dtype=int,
     )
-    splits = split_window_dates(
-        window_end_dates=window_end_dates,
-        validation_ratio=backtest_config.validation_ratio,
-        test_ratio=backtest_config.test_ratio,
-        random_state=backtest_config.split_random_state,
-    )
-    split_summary = summarize_split_dates(splits)
+    if "splits" in experiment_result and experiment_result["splits"] is not None:
+        splits = {
+            split_name: pd.Index(split_dates, name="Date")
+            for split_name, split_dates in experiment_result["splits"].items()
+        }
+        split_summary = experiment_result.get("split_summary", summarize_split_dates(splits))
+    else:
+        splits = split_window_dates(
+            window_end_dates=window_end_dates,
+            validation_ratio=backtest_config.validation_ratio,
+            test_ratio=backtest_config.test_ratio,
+            random_state=backtest_config.split_random_state,
+        )
+        split_summary = summarize_split_dates(splits)
 
     decision_clusters, decision_returns = prepare_rl_decision_data(
         cluster_series=raw_cluster_series,

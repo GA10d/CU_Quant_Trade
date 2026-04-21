@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-04-20T05:07:09.687487+00:00",
+  "saved_at": "2026-04-20T15:18:44.649056+00:00",
   "experiment_name": "cls_token_transformer",
   "summary": {
     "experiment_name": "cls_token_transformer",
@@ -7,13 +7,13 @@
     "input_dim": 8,
     "window_size": 60,
     "n_sequence_rows": 2834,
-    "n_windows": 2775,
+    "n_windows": 2657,
     "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
     "skipped_sequence_features": "",
-    "best_epoch": 28,
-    "best_val_loss": 0.6875906685988108,
+    "best_epoch": 49,
+    "best_val_loss": 0.6603488698601723,
     "target_cluster_count": 4,
-    "silhouette": 0.20525610446929932,
+    "silhouette": 0.22762130200862885,
     "ari_vs_hmm": NaN,
     "nmi_vs_hmm": NaN
   },

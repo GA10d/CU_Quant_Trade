@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-04-20T05:03:50.498174+00:00",
+  "saved_at": "2026-04-20T15:16:17.502125+00:00",
   "experiment_name": "rnn_autoencoder",
   "summary": {
     "experiment_name": "rnn_autoencoder",
@@ -7,15 +7,15 @@
     "input_dim": 8,
     "window_size": 60,
     "n_sequence_rows": 2834,
-    "n_windows": 2775,
+    "n_windows": 2657,
     "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
     "skipped_sequence_features": "",
-    "best_epoch": 24,
-    "best_val_loss": 1.0155880914794073,
+    "best_epoch": 3,
+    "best_val_loss": 0.9775824397802353,
     "target_cluster_count": 4,
-    "silhouette": 0.22716255486011505,
-    "ari_vs_hmm": 0.030351041147217105,
-    "nmi_vs_hmm": 0.042186215356333746
+    "silhouette": 0.2878953218460083,
+    "ari_vs_hmm": -4.790736015036575e-05,
+    "nmi_vs_hmm": 0.01919050615476423
   },
   "model_state_path": "f:\\Documents\\GitHub\\CU_Quant_Trade\\Final_Project\\track_b\\models\\rnn_autoencoder__52ea8b961dece280\\model_state.pt",
   "device": "cuda"

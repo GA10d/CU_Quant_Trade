@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-04-20T05:02:47.983814+00:00",
+  "saved_at": "2026-04-20T15:13:45.265829+00:00",
   "experiment_name": "cls_token_transformer",
   "summary": {
     "experiment_name": "cls_token_transformer",
@@ -7,15 +7,15 @@
     "input_dim": 8,
     "window_size": 60,
     "n_sequence_rows": 2834,
-    "n_windows": 2775,
+    "n_windows": 2657,
     "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
     "skipped_sequence_features": "",
-    "best_epoch": 28,
-    "best_val_loss": 0.6875906685988108,
+    "best_epoch": 49,
+    "best_val_loss": 0.6603488698601723,
     "target_cluster_count": 4,
-    "silhouette": 0.20525610446929932,
-    "ari_vs_hmm": 0.06867066392355047,
-    "nmi_vs_hmm": 0.11122877224386739
+    "silhouette": 0.22762130200862885,
+    "ari_vs_hmm": 0.039840124095355006,
+    "nmi_vs_hmm": 0.0897851612615812
   },
   "model_state_path": "f:\\Documents\\GitHub\\CU_Quant_Trade\\Final_Project\\track_b\\models\\cls_token_transformer__6dcf3f4cf3e62ebe\\model_state.pt",
   "device": "cuda"

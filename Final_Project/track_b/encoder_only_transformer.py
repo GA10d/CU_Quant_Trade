@@ -390,6 +390,33 @@ def make_windows(frame: pd.DataFrame, window_size: int) -> tuple[np.ndarray, pd.
     return np.stack(windows), pd.Index(end_dates, name="Date")
 
 
+def summarize_date_splits(splits: dict[str, pd.Index]) -> pd.DataFrame:
+    rows = []
+    for split_name in ("train", "validation", "test"):
+        split_dates = pd.Index(splits.get(split_name, pd.Index([], name="Date")), name="Date")
+        if len(split_dates) == 0:
+            rows.append(
+                {
+                    "split": split_name,
+                    "n_windows": 0,
+                    "start_date": pd.NaT,
+                    "end_date": pd.NaT,
+                    "selection": "empty",
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "split": split_name,
+                    "n_windows": int(len(split_dates)),
+                    "start_date": pd.Timestamp(split_dates[0]),
+                    "end_date": pd.Timestamp(split_dates[-1]),
+                    "selection": "ordered_contiguous_block",
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 class SinusoidalPositionalEncoding(nn.Module):
     def __init__(self, d_model: int, max_len: int = 512):
         super().__init__()
@@ -550,7 +577,6 @@ def split_ordered_train_random_holdout_indices(
 
     train_count = max(1, int(n_obs * normalized_train_ratio))
     train_count = min(train_count, n_obs - 2)
-
     holdout_indices = np.arange(train_count, n_obs, dtype=int)
     if len(holdout_indices) < 2:
         raise ValueError(
@@ -566,12 +592,8 @@ def split_ordered_train_random_holdout_indices(
     validation_count = max(1, validation_count)
     validation_count = min(validation_count, len(holdout_indices) - 1)
 
-    rng = np.random.default_rng(random_state)
-    shuffled_holdout = holdout_indices.copy()
-    rng.shuffle(shuffled_holdout)
-
-    validation_indices = np.sort(shuffled_holdout[:validation_count])
-    test_indices = np.sort(shuffled_holdout[validation_count:])
+    validation_indices = holdout_indices[:validation_count]
+    test_indices = holdout_indices[validation_count:]
 
     return {
         "train": np.arange(train_count, dtype=int),
@@ -580,20 +602,77 @@ def split_ordered_train_random_holdout_indices(
     }
 
 
+def build_split_windows(
+    frame: pd.DataFrame,
+    window_size: int,
+    train_ratio: float,
+    validation_ratio: float,
+    test_ratio: float,
+    random_state: int,
+) -> dict:
+    row_split_indices = split_ordered_train_random_holdout_indices(
+        n_obs=len(frame),
+        train_ratio=train_ratio,
+        validation_ratio=validation_ratio,
+        test_ratio=test_ratio,
+        random_state=random_state,
+    )
+
+    windows_by_split: dict[str, np.ndarray] = {}
+    split_dates: dict[str, pd.Index] = {}
+    window_split_indices: dict[str, np.ndarray] = {}
+    ordered_windows: list[np.ndarray] = []
+    ordered_dates: list[pd.Index] = []
+    cursor = 0
+
+    for split_name in ("train", "validation", "test"):
+        row_indices = np.asarray(row_split_indices[split_name], dtype=int)
+        split_frame = frame.iloc[row_indices].copy()
+        if len(split_frame) < window_size:
+            raise ValueError(
+                f"{split_name} split has only {len(split_frame)} rows, which is not enough "
+                f"to form a {window_size}-day window."
+            )
+
+        split_windows, split_window_end_dates = make_windows(split_frame, window_size)
+        windows_by_split[split_name] = split_windows
+        split_dates[split_name] = pd.Index(split_window_end_dates, name="Date")
+        ordered_windows.append(split_windows)
+        ordered_dates.append(pd.Index(split_window_end_dates, name="Date"))
+
+        split_window_count = len(split_windows)
+        window_split_indices[split_name] = np.arange(cursor, cursor + split_window_count, dtype=int)
+        cursor += split_window_count
+
+    windows = np.concatenate(ordered_windows, axis=0)
+    window_end_dates = pd.Index(np.concatenate([dates.to_numpy() for dates in ordered_dates]), name="Date")
+
+    return {
+        "windows": windows,
+        "window_end_dates": window_end_dates,
+        "splits": split_dates,
+        "split_summary": summarize_date_splits(split_dates),
+        "window_split_indices": window_split_indices,
+        "row_split_indices": row_split_indices,
+    }
+
+
 def train_encoder_only_transformer(
     windows: np.ndarray,
     model_config: EncoderOnlyTransformerConfig,
     training_config: TrainingConfig,
     window_size: int,
+    split_indices: dict[str, np.ndarray] | None = None,
 ) -> tuple[EncoderOnlyMaskedTransformer, pd.DataFrame, torch.Tensor, torch.device]:
     device = resolve_device(training_config.device)
-    split_indices = split_ordered_train_random_holdout_indices(
-        n_obs=len(windows),
-        train_ratio=training_config.train_ratio,
-        validation_ratio=training_config.validation_ratio,
-        test_ratio=training_config.test_ratio,
-        random_state=training_config.random_state,
-    )
+    if split_indices is None:
+        split_indices = split_ordered_train_random_holdout_indices(
+            n_obs=len(windows),
+            train_ratio=training_config.train_ratio,
+            validation_ratio=training_config.validation_ratio,
+            test_ratio=training_config.test_ratio,
+            random_state=training_config.random_state,
+        )
 
     train_windows = torch.tensor(windows[split_indices["train"]], dtype=torch.float32)
     val_windows = torch.tensor(windows[split_indices["validation"]], dtype=torch.float32)
@@ -994,13 +1073,34 @@ def run_encoder_only_experiment(
     market_data, macro_data = load_market_and_macro(data_config)
     sequence_panel, sequence_metadata = build_sequence_panel(market_data, macro_data, data_config)
 
+    row_split_indices = split_ordered_train_random_holdout_indices(
+        n_obs=len(sequence_panel),
+        train_ratio=training_config.train_ratio,
+        validation_ratio=training_config.validation_ratio,
+        test_ratio=training_config.test_ratio,
+        random_state=training_config.random_state,
+    )
+    train_feature_frame = sequence_panel.iloc[row_split_indices["train"]].copy()
     sequence_scaler = StandardScaler()
+    sequence_scaler.fit(train_feature_frame)
     sequence_z = pd.DataFrame(
-        sequence_scaler.fit_transform(sequence_panel),
+        sequence_scaler.transform(sequence_panel),
         index=sequence_panel.index,
         columns=sequence_panel.columns,
     )
-    windows, window_end_dates = make_windows(sequence_z, data_config.window_size)
+    prepared_windows = build_split_windows(
+        frame=sequence_z,
+        window_size=data_config.window_size,
+        train_ratio=training_config.train_ratio,
+        validation_ratio=training_config.validation_ratio,
+        test_ratio=training_config.test_ratio,
+        random_state=training_config.random_state,
+    )
+    windows = prepared_windows["windows"]
+    window_end_dates = prepared_windows["window_end_dates"]
+    splits = prepared_windows["splits"]
+    split_summary = prepared_windows["split_summary"]
+    window_split_indices = prepared_windows["window_split_indices"]
 
     hmm_results = None
     target_cluster_count = clustering_config.target_cluster_count
@@ -1020,6 +1120,7 @@ def run_encoder_only_experiment(
         model_config=model_config,
         training_config=training_config,
         window_size=data_config.window_size,
+        split_indices=window_split_indices,
     )
     embeddings = extract_embeddings(model, all_windows, device)
     cluster_scan, cluster_model, cluster_labels, target_cluster_count = cluster_embeddings(
@@ -1110,6 +1211,9 @@ def run_encoder_only_experiment(
         "sequence_scaler": sequence_scaler,
         "windows": windows,
         "window_end_dates": window_end_dates,
+        "splits": splits,
+        "split_summary": split_summary,
+        "window_split_indices": window_split_indices,
         "model": model,
         "history_df": history_df,
         "embeddings": embeddings,
@@ -1177,6 +1281,9 @@ __all__ = [
     "EncoderOnlyMaskedTransformer",
     "build_sequence_panel",
     "make_windows",
+    "build_split_windows",
+    "summarize_date_splits",
+    "split_ordered_train_random_holdout_indices",
     "run_encoder_only_experiment",
     "run_market_tuple_encoder_only_experiment",
     "compare_experiment_summaries",

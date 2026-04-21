@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-04-20T05:07:53.626807+00:00",
+  "saved_at": "2026-04-20T15:21:10.119967+00:00",
   "experiment_name": "transformer_autoencoder",
   "summary": {
     "experiment_name": "transformer_autoencoder",
@@ -7,13 +7,13 @@
     "input_dim": 8,
     "window_size": 60,
     "n_sequence_rows": 2834,
-    "n_windows": 2775,
+    "n_windows": 2657,
     "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
     "skipped_sequence_features": "",
-    "best_epoch": 15,
-    "best_val_loss": 0.2834860119554732,
+    "best_epoch": 29,
+    "best_val_loss": 0.23846080712974072,
     "target_cluster_count": 4,
-    "silhouette": 0.162725031375885,
+    "silhouette": 0.13395942747592926,
     "ari_vs_hmm": NaN,
     "nmi_vs_hmm": NaN
   },

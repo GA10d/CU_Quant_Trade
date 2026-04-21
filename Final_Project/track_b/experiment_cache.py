@@ -162,7 +162,7 @@ def load_experiment_result_from_cache(
     cache_path = Path(cache_dir)
     metadata = json.loads((cache_path / "metadata.json").read_text(encoding="utf-8"))
 
-    prepared_inputs = prepare_sequence_experiment_inputs(data_config)
+    prepared_inputs = prepare_sequence_experiment_inputs(data_config, training_config=training_config)
     embeddings = np.load(cache_path / "embeddings.npy")
     cluster_labels = np.load(cache_path / "cluster_labels.npy")
     stored_window_dates = pd.read_csv(cache_path / "window_end_dates.csv")["Date"]
@@ -201,6 +201,9 @@ def load_experiment_result_from_cache(
         "sequence_scaler": prepared_inputs["sequence_scaler"],
         "windows": prepared_inputs["windows"],
         "window_end_dates": window_end_dates,
+        "splits": prepared_inputs["splits"],
+        "split_summary": prepared_inputs["split_summary"],
+        "window_split_indices": prepared_inputs["window_split_indices"],
         "model": None,
         "model_state_path": metadata.get("model_state_path"),
         "history_df": history_df if history_df is not None else pd.DataFrame(),

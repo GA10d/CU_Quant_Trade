@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-04-20T05:04:20.061943+00:00",
+  "saved_at": "2026-04-20T15:16:56.478051+00:00",
   "experiment_name": "kmeans_baseline",
   "summary": {
     "experiment_name": "kmeans_baseline",
@@ -7,15 +7,15 @@
     "input_dim": 8,
     "window_size": 60,
     "n_sequence_rows": 2834,
-    "n_windows": 2775,
+    "n_windows": 2657,
     "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
     "skipped_sequence_features": "",
     "best_epoch": 0,
     "best_val_loss": NaN,
     "target_cluster_count": 4,
-    "silhouette": -0.11341243237257004,
-    "ari_vs_hmm": 0.0008929255286175533,
-    "nmi_vs_hmm": 0.005832503252571024
+    "silhouette": 0.0044004120863974094,
+    "ari_vs_hmm": -0.0004485252020805287,
+    "nmi_vs_hmm": 0.0017385585596568656
   },
   "model_state_path": null,
   "device": "cpu"

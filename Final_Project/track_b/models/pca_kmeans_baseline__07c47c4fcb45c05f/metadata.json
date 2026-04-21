@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-04-20T05:04:25.579314+00:00",
+  "saved_at": "2026-04-20T15:17:00.304431+00:00",
   "experiment_name": "pca_kmeans_baseline",
   "summary": {
     "experiment_name": "pca_kmeans_baseline",
@@ -7,15 +7,15 @@
     "input_dim": 8,
     "window_size": 60,
     "n_sequence_rows": 2834,
-    "n_windows": 2775,
+    "n_windows": 2657,
     "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
     "skipped_sequence_features": "",
     "best_epoch": 0,
     "best_val_loss": NaN,
     "target_cluster_count": 4,
-    "silhouette": 0.02173003926873207,
-    "ari_vs_hmm": 0.005161330871982031,
-    "nmi_vs_hmm": 0.017781606438841767
+    "silhouette": 0.02074313908815384,
+    "ari_vs_hmm": 0.003562934165377454,
+    "nmi_vs_hmm": 0.012890443784257475
   },
   "model_state_path": null,
   "device": "cpu"

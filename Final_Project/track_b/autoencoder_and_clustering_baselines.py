@@ -192,15 +192,17 @@ def _train_full_autoencoder(
     model: nn.Module,
     training_config: TrainingConfig,
     log_prefix: str,
+    split_indices: dict[str, np.ndarray] | None = None,
 ) -> tuple[nn.Module, pd.DataFrame, torch.Tensor, torch.device]:
     device = resolve_device(training_config.device)
-    split_indices = split_ordered_train_random_holdout_indices(
-        n_obs=len(windows),
-        train_ratio=training_config.train_ratio,
-        validation_ratio=training_config.validation_ratio,
-        test_ratio=training_config.test_ratio,
-        random_state=training_config.random_state,
-    )
+    if split_indices is None:
+        split_indices = split_ordered_train_random_holdout_indices(
+            n_obs=len(windows),
+            train_ratio=training_config.train_ratio,
+            validation_ratio=training_config.validation_ratio,
+            test_ratio=training_config.test_ratio,
+            random_state=training_config.random_state,
+        )
 
     train_windows = torch.tensor(windows[split_indices["train"]], dtype=torch.float32)
     val_windows = torch.tensor(windows[split_indices["validation"]], dtype=torch.float32)
@@ -291,15 +293,17 @@ def _train_vae(
     model: WindowVAE,
     model_config: WindowVAEConfig,
     training_config: TrainingConfig,
+    split_indices: dict[str, np.ndarray] | None = None,
 ) -> tuple[WindowVAE, pd.DataFrame, torch.Tensor, torch.device]:
     device = resolve_device(training_config.device)
-    split_indices = split_ordered_train_random_holdout_indices(
-        n_obs=len(windows),
-        train_ratio=training_config.train_ratio,
-        validation_ratio=training_config.validation_ratio,
-        test_ratio=training_config.test_ratio,
-        random_state=training_config.random_state,
-    )
+    if split_indices is None:
+        split_indices = split_ordered_train_random_holdout_indices(
+            n_obs=len(windows),
+            train_ratio=training_config.train_ratio,
+            validation_ratio=training_config.validation_ratio,
+            test_ratio=training_config.test_ratio,
+            random_state=training_config.random_state,
+        )
 
     train_windows = torch.tensor(windows[split_indices["train"]], dtype=torch.float32)
     val_windows = torch.tensor(windows[split_indices["validation"]], dtype=torch.float32)
@@ -420,7 +424,7 @@ def _run_autoencoder_experiment(
     hmm_config = hmm_config or HMMReferenceConfig()
 
     set_seed(training_config.random_state)
-    prepared_inputs = prepare_sequence_experiment_inputs(data_config)
+    prepared_inputs = prepare_sequence_experiment_inputs(data_config, training_config=training_config)
     hmm_results = prepare_hmm_reference_for_experiment(
         data_config=data_config,
         training_config=training_config,
@@ -437,6 +441,7 @@ def _run_autoencoder_experiment(
             model=model,
             training_config=training_config,
             log_prefix=architecture,
+            split_indices=prepared_inputs["window_split_indices"],
         )
     elif architecture == "vae":
         model = WindowVAE(
@@ -449,6 +454,7 @@ def _run_autoencoder_experiment(
             model=model,
             model_config=model_config,
             training_config=training_config,
+            split_indices=prepared_inputs["window_split_indices"],
         )
     else:
         raise ValueError(f"Unsupported autoencoder architecture: {architecture}")
@@ -573,7 +579,7 @@ def _run_classical_clustering_experiment(
     hmm_config = hmm_config or HMMReferenceConfig()
 
     set_seed(training_config.random_state)
-    prepared_inputs = prepare_sequence_experiment_inputs(data_config)
+    prepared_inputs = prepare_sequence_experiment_inputs(data_config, training_config=training_config)
     hmm_results = prepare_hmm_reference_for_experiment(
         data_config=data_config,
         training_config=training_config,

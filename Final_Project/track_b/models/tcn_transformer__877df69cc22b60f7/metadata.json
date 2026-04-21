@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-04-20T05:07:27.424730+00:00",
+  "saved_at": "2026-04-20T15:20:34.070803+00:00",
   "experiment_name": "tcn_transformer",
   "summary": {
     "experiment_name": "tcn_transformer",
@@ -7,13 +7,13 @@
     "input_dim": 8,
     "window_size": 60,
     "n_sequence_rows": 2834,
-    "n_windows": 2775,
+    "n_windows": 2657,
     "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
     "skipped_sequence_features": "",
-    "best_epoch": 15,
-    "best_val_loss": 0.7084127200974358,
+    "best_epoch": 5,
+    "best_val_loss": 0.7253339290618896,
     "target_cluster_count": 4,
-    "silhouette": 0.2085762470960617,
+    "silhouette": 0.16065503656864166,
     "ari_vs_hmm": NaN,
     "nmi_vs_hmm": NaN
   },

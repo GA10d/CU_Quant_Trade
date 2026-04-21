@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-04-20T05:06:07.165633+00:00",
+  "saved_at": "2026-04-20T15:17:31.895655+00:00",
   "experiment_name": "encoder_only_market_tuples",
   "summary": {
     "experiment_name": "encoder_only_market_tuples",
@@ -7,13 +7,13 @@
     "input_dim": 35,
     "window_size": 60,
     "n_sequence_rows": 2835,
-    "n_windows": 2776,
+    "n_windows": 2658,
     "used_sequence_features": "GLD_close, GLD_high, GLD_low, GLD_open, GLD_log1p_volume, HYG_close, HYG_high, HYG_low, HYG_open, HYG_log1p_volume, LQD_close, LQD_high, LQD_low, LQD_open, LQD_log1p_volume, SPY_close, SPY_high, SPY_low, SPY_open, SPY_log1p_volume, TLT_close, TLT_high, TLT_low, TLT_open, TLT_log1p_volume, UUP_close, UUP_high, UUP_low, UUP_open, UUP_log1p_volume, VIX_close, VIX_high, VIX_low, VIX_open, VIX_log1p_volume",
     "skipped_sequence_features": "",
-    "best_epoch": 23,
-    "best_val_loss": 0.9282220411631796,
+    "best_epoch": 26,
+    "best_val_loss": 0.9972787974402308,
     "target_cluster_count": 4,
-    "silhouette": 0.49477216601371765,
+    "silhouette": 0.5050727725028992,
     "ari_vs_hmm": NaN,
     "nmi_vs_hmm": NaN
   },

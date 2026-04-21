@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-04-20T05:03:12.885644+00:00",
+  "saved_at": "2026-04-20T15:15:45.121385+00:00",
   "experiment_name": "tcn_transformer",
   "summary": {
     "experiment_name": "tcn_transformer",
@@ -7,15 +7,15 @@
     "input_dim": 8,
     "window_size": 60,
     "n_sequence_rows": 2834,
-    "n_windows": 2775,
+    "n_windows": 2657,
     "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
     "skipped_sequence_features": "",
-    "best_epoch": 15,
-    "best_val_loss": 0.708417170577579,
+    "best_epoch": 5,
+    "best_val_loss": 0.7253339290618896,
     "target_cluster_count": 4,
-    "silhouette": 0.20857615768909454,
-    "ari_vs_hmm": 0.046666434273288926,
-    "nmi_vs_hmm": 0.12262839131024161
+    "silhouette": 0.16065503656864166,
+    "ari_vs_hmm": 0.06330701368405124,
+    "nmi_vs_hmm": 0.11291354256140679
   },
   "model_state_path": "f:\\Documents\\GitHub\\CU_Quant_Trade\\Final_Project\\track_b\\models\\tcn_transformer__7376adea97d53d95\\model_state.pt",
   "device": "cuda"

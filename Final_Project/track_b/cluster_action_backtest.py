@@ -104,7 +104,8 @@ def build_hmm_baseline_experiment_result(
     if not HMMLEARN_AVAILABLE:
         return None
 
-    prepared_inputs = prepare_sequence_experiment_inputs(data_config)
+    training_config = TrainingConfig(random_state=random_state)
+    prepared_inputs = prepare_sequence_experiment_inputs(data_config, training_config=training_config)
     hmm_config = HMMReferenceConfig(
         enabled=True,
         state_candidates=(target_cluster_count,),
@@ -175,7 +176,7 @@ def build_hmm_baseline_experiment_result(
         "summary": summary,
         "data_config": data_config,
         "model_config": None,
-        "training_config": TrainingConfig(random_state=random_state),
+        "training_config": training_config,
         "clustering_config": None,
         "hmm_config": hmm_config,
         "market_data": prepared_inputs["market_data"],
@@ -185,6 +186,9 @@ def build_hmm_baseline_experiment_result(
         "sequence_scaler": prepared_inputs["sequence_scaler"],
         "windows": prepared_inputs["windows"][positions],
         "window_end_dates": aligned_dates,
+        "splits": prepared_inputs["splits"],
+        "split_summary": prepared_inputs["split_summary"],
+        "window_split_indices": prepared_inputs["window_split_indices"],
         "model": hmm_results["hmm_model"],
         "history_df": pd.DataFrame(),
         "embeddings": embeddings,
@@ -248,7 +252,7 @@ def summarize_split_dates(splits: dict[str, pd.Index]) -> pd.DataFrame:
                     "n_windows": int(len(split_dates)),
                     "start_date": pd.Timestamp(split_dates[0]),
                     "end_date": pd.Timestamp(split_dates[-1]),
-                    "selection": "ordered_oldest" if split_name == "train" else "random_from_holdout",
+                    "selection": "ordered_contiguous_block",
                 }
             )
     return pd.DataFrame(rows)
@@ -519,13 +523,20 @@ def evaluate_model_cluster_actions(
 ) -> dict:
     window_end_dates = pd.Index(experiment_result["window_end_dates"], name="Date")
     cluster_series = pd.Series(experiment_result["cluster_labels"], index=window_end_dates, name="cluster")
-    splits = split_window_dates(
-        window_end_dates=window_end_dates,
-        validation_ratio=config.validation_ratio,
-        test_ratio=config.test_ratio,
-        random_state=config.split_random_state,
-    )
-    split_summary = summarize_split_dates(splits)
+    if "splits" in experiment_result and experiment_result["splits"] is not None:
+        splits = {
+            split_name: pd.Index(split_dates, name="Date")
+            for split_name, split_dates in experiment_result["splits"].items()
+        }
+        split_summary = experiment_result.get("split_summary", summarize_split_dates(splits))
+    else:
+        splits = split_window_dates(
+            window_end_dates=window_end_dates,
+            validation_ratio=config.validation_ratio,
+            test_ratio=config.test_ratio,
+            random_state=config.split_random_state,
+        )
+        split_summary = summarize_split_dates(splits)
 
     search_result = search_best_cluster_action_mapping(
         cluster_series=cluster_series,
@@ -580,15 +591,18 @@ def evaluate_random_choice_baseline(
     random_state: int = 42,
     experiment_name: str = "random_choice",
 ) -> dict:
-    prepared_inputs = prepare_sequence_experiment_inputs(data_config)
-    window_end_dates = pd.Index(prepared_inputs["window_end_dates"], name="Date")
-    splits = split_window_dates(
-        window_end_dates=window_end_dates,
-        validation_ratio=config.validation_ratio,
-        test_ratio=config.test_ratio,
-        random_state=config.split_random_state,
+    prepared_inputs = prepare_sequence_experiment_inputs(
+        data_config,
+        training_config=TrainingConfig(
+            train_ratio=config.train_ratio,
+            validation_ratio=config.validation_ratio,
+            test_ratio=config.test_ratio,
+            random_state=config.split_random_state,
+        ),
     )
-    split_summary = summarize_split_dates(splits)
+    window_end_dates = pd.Index(prepared_inputs["window_end_dates"], name="Date")
+    splits = prepared_inputs["splits"]
+    split_summary = prepared_inputs["split_summary"]
 
     action_names = list(action_library.keys())
     if not action_names:
@@ -773,22 +787,25 @@ def _add_split_boundaries(ax, split_summary: pd.DataFrame, y_min: float, y_max: 
         "test": "#dff0d8",
     }
     for _, row in split_summary.iterrows():
-        if pd.isna(row["start_date"]) or pd.isna(row["end_date"]):
+        start_date = pd.to_datetime(row.get("start_date"), errors="coerce")
+        end_date = pd.to_datetime(row.get("end_date"), errors="coerce")
+        if pd.isna(start_date) or pd.isna(end_date):
             continue
-        if row.get("selection") != "ordered_oldest":
+        if row.get("selection") not in {"ordered_oldest", "ordered_contiguous_block"}:
             continue
-        ax.axvspan(row["start_date"], row["end_date"], alpha=0.12, color=color_map.get(row["split"], "#eeeeee"))
+        ax.axvspan(start_date, end_date, alpha=0.12, color=color_map.get(row["split"], "#eeeeee"))
 
     for _, row in split_summary.iterrows():
-        if pd.isna(row["start_date"]):
+        start_date = pd.to_datetime(row.get("start_date"), errors="coerce")
+        if pd.isna(start_date):
             continue
-        if row.get("selection") != "ordered_oldest":
+        if row.get("selection") not in {"ordered_oldest", "ordered_contiguous_block"}:
             continue
         if row["split"] == "train":
             continue
-        ax.axvline(row["start_date"], color="gray", linestyle="--", linewidth=1.0, alpha=0.8)
+        ax.axvline(start_date, color="gray", linestyle="--", linewidth=1.0, alpha=0.8)
         ax.text(
-            row["start_date"],
+            start_date,
             y_max,
             f" {row['split']}",
             rotation=90,

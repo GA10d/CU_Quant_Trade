@@ -11,6 +11,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from encoder_only_transformer import (
+    build_split_windows,
     ClusteringConfig,
     HMMLEARN_AVAILABLE,
     HMMReferenceConfig,
@@ -20,7 +21,6 @@ from encoder_only_transformer import (
     build_sequence_panel,
     cluster_embeddings,
     load_market_and_macro,
-    make_windows,
     masked_reconstruction_loss,
     make_torch_dataloader_generator,
     resolve_device,
@@ -140,15 +140,17 @@ def train_recurrent_baseline(
     windows: np.ndarray,
     model_config: RecurrentBaselineConfig,
     training_config: TrainingConfig,
+    split_indices: dict[str, np.ndarray] | None = None,
 ) -> tuple[RecurrentMaskedAutoencoder, pd.DataFrame, torch.Tensor, torch.device]:
     device = resolve_device(training_config.device)
-    split_indices = split_ordered_train_random_holdout_indices(
-        n_obs=len(windows),
-        train_ratio=training_config.train_ratio,
-        validation_ratio=training_config.validation_ratio,
-        test_ratio=training_config.test_ratio,
-        random_state=training_config.random_state,
-    )
+    if split_indices is None:
+        split_indices = split_ordered_train_random_holdout_indices(
+            n_obs=len(windows),
+            train_ratio=training_config.train_ratio,
+            validation_ratio=training_config.validation_ratio,
+            test_ratio=training_config.test_ratio,
+            random_state=training_config.random_state,
+        )
 
     train_windows = torch.tensor(windows[split_indices["train"]], dtype=torch.float32)
     val_windows = torch.tensor(windows[split_indices["validation"]], dtype=torch.float32)
@@ -366,13 +368,34 @@ def run_recurrent_experiment(
     market_data, macro_data = load_market_and_macro(data_config)
     sequence_panel, sequence_metadata = build_sequence_panel(market_data, macro_data, data_config)
 
+    row_split_indices = split_ordered_train_random_holdout_indices(
+        n_obs=len(sequence_panel),
+        train_ratio=training_config.train_ratio,
+        validation_ratio=training_config.validation_ratio,
+        test_ratio=training_config.test_ratio,
+        random_state=training_config.random_state,
+    )
+    train_feature_frame = sequence_panel.iloc[row_split_indices["train"]].copy()
     sequence_scaler = StandardScaler()
+    sequence_scaler.fit(train_feature_frame)
     sequence_z = pd.DataFrame(
-        sequence_scaler.fit_transform(sequence_panel),
+        sequence_scaler.transform(sequence_panel),
         index=sequence_panel.index,
         columns=sequence_panel.columns,
     )
-    windows, window_end_dates = make_windows(sequence_z, data_config.window_size)
+    prepared_windows = build_split_windows(
+        frame=sequence_z,
+        window_size=data_config.window_size,
+        train_ratio=training_config.train_ratio,
+        validation_ratio=training_config.validation_ratio,
+        test_ratio=training_config.test_ratio,
+        random_state=training_config.random_state,
+    )
+    windows = prepared_windows["windows"]
+    window_end_dates = prepared_windows["window_end_dates"]
+    splits = prepared_windows["splits"]
+    split_summary = prepared_windows["split_summary"]
+    window_split_indices = prepared_windows["window_split_indices"]
 
     hmm_results = None
     target_cluster_count = clustering_config.target_cluster_count
@@ -391,6 +414,7 @@ def run_recurrent_experiment(
         windows=windows,
         model_config=model_config,
         training_config=training_config,
+        split_indices=window_split_indices,
     )
     embeddings = extract_recurrent_embeddings(model, all_windows, device)
     cluster_scan, cluster_model, cluster_labels, target_cluster_count = cluster_embeddings(
@@ -429,6 +453,9 @@ def run_recurrent_experiment(
         "sequence_scaler": sequence_scaler,
         "windows": windows,
         "window_end_dates": window_end_dates,
+        "splits": splits,
+        "split_summary": split_summary,
+        "window_split_indices": window_split_indices,
         "model": model,
         "history_df": history_df,
         "embeddings": embeddings,

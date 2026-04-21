@@ -12,26 +12,47 @@ from encoder_only_transformer import (
     HMMReferenceConfig,
     SequenceDataConfig,
     TrainingConfig,
+    build_split_windows,
     build_hmm_reference,
     build_sequence_panel,
     load_market_and_macro,
-    make_windows,
+    split_ordered_train_random_holdout_indices,
 )
 
 
 def prepare_sequence_experiment_inputs(
     data_config: SequenceDataConfig,
+    training_config: TrainingConfig | None = None,
 ) -> dict:
+    training_config = training_config or TrainingConfig()
     market_data, macro_data = load_market_and_macro(data_config)
     sequence_panel, sequence_metadata = build_sequence_panel(market_data, macro_data, data_config)
 
+    row_split_indices = split_ordered_train_random_holdout_indices(
+        n_obs=len(sequence_panel),
+        train_ratio=training_config.train_ratio,
+        validation_ratio=training_config.validation_ratio,
+        test_ratio=training_config.test_ratio,
+        random_state=training_config.random_state,
+    )
+    train_feature_frame = sequence_panel.iloc[row_split_indices["train"]].copy()
     sequence_scaler = StandardScaler()
+    sequence_scaler.fit(train_feature_frame)
     sequence_z = pd.DataFrame(
-        sequence_scaler.fit_transform(sequence_panel),
+        sequence_scaler.transform(sequence_panel),
         index=sequence_panel.index,
         columns=sequence_panel.columns,
     )
-    windows, window_end_dates = make_windows(sequence_z, data_config.window_size)
+    split_windows = build_split_windows(
+        frame=sequence_z,
+        window_size=data_config.window_size,
+        train_ratio=training_config.train_ratio,
+        validation_ratio=training_config.validation_ratio,
+        test_ratio=training_config.test_ratio,
+        random_state=training_config.random_state,
+    )
+    windows = split_windows["windows"]
+    window_end_dates = split_windows["window_end_dates"]
 
     return {
         "market_data": market_data,
@@ -41,6 +62,10 @@ def prepare_sequence_experiment_inputs(
         "sequence_scaler": sequence_scaler,
         "windows": windows,
         "window_end_dates": window_end_dates,
+        "splits": split_windows["splits"],
+        "split_summary": split_windows["split_summary"],
+        "window_split_indices": split_windows["window_split_indices"],
+        "row_split_indices": row_split_indices,
     }
 
 
@@ -209,6 +234,9 @@ def build_experiment_result(
         "sequence_scaler": prepared_inputs["sequence_scaler"],
         "windows": prepared_inputs["windows"],
         "window_end_dates": prepared_inputs["window_end_dates"],
+        "splits": prepared_inputs["splits"],
+        "split_summary": prepared_inputs["split_summary"],
+        "window_split_indices": prepared_inputs["window_split_indices"],
         "model": model,
         "history_df": history_df if history_df is not None else pd.DataFrame(),
         "embeddings": embeddings,

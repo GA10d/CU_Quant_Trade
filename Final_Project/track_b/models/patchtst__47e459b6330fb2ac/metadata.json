@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-04-20T05:02:05.175558+00:00",
+  "saved_at": "2026-04-20T15:12:44.485341+00:00",
   "experiment_name": "patchtst",
   "summary": {
     "experiment_name": "patchtst",
@@ -7,15 +7,15 @@
     "input_dim": 8,
     "window_size": 60,
     "n_sequence_rows": 2834,
-    "n_windows": 2775,
+    "n_windows": 2657,
     "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
     "skipped_sequence_features": "",
-    "best_epoch": 42,
-    "best_val_loss": 0.9699503713183932,
+    "best_epoch": 21,
+    "best_val_loss": 0.9568365588784218,
     "target_cluster_count": 4,
-    "silhouette": 0.17054004967212677,
-    "ari_vs_hmm": 0.03132125994302037,
-    "nmi_vs_hmm": 0.047112950521767866
+    "silhouette": 0.14523932337760925,
+    "ari_vs_hmm": 0.005661710106826318,
+    "nmi_vs_hmm": 0.014017038922921344
   },
   "model_state_path": "f:\\Documents\\GitHub\\CU_Quant_Trade\\Final_Project\\track_b\\models\\patchtst__47e459b6330fb2ac\\model_state.pt",
   "device": "cuda"

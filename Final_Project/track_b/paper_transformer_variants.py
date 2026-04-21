@@ -425,7 +425,7 @@ def _run_paper_transformer_experiment(
     hmm_config = hmm_config or HMMReferenceConfig()
 
     set_seed(training_config.random_state)
-    prepared_inputs = prepare_sequence_experiment_inputs(data_config)
+    prepared_inputs = prepare_sequence_experiment_inputs(data_config, training_config=training_config)
     hmm_results = prepare_hmm_reference_for_experiment(
         data_config=data_config,
         training_config=training_config,
@@ -440,6 +440,7 @@ def _run_paper_transformer_experiment(
         model=model,
         training_config=training_config,
         log_prefix=architecture,
+        split_indices=prepared_inputs["window_split_indices"],
     )
     embeddings = _extract_embeddings(model, all_windows, device)
     cluster_scan, cluster_model, cluster_labels, target_cluster_count = cluster_embeddings(
@@ -494,7 +495,7 @@ def run_patchtst_experiment(
 ) -> dict:
     model_config = model_config or PatchTSTConfig()
     data_config = data_config or SequenceDataConfig()
-    prepared_inputs = prepare_sequence_experiment_inputs(data_config)
+    prepared_inputs = prepare_sequence_experiment_inputs(data_config, training_config=training_config)
     model = PatchTSTBackbone(
         input_dim=prepared_inputs["windows"].shape[2],
         window_size=data_config.window_size,
@@ -522,7 +523,7 @@ def run_pathformer_experiment(
 ) -> dict:
     model_config = model_config or PathformerConfig()
     data_config = data_config or SequenceDataConfig()
-    prepared_inputs = prepare_sequence_experiment_inputs(data_config)
+    prepared_inputs = prepare_sequence_experiment_inputs(data_config, training_config=training_config)
     model = PathformerBackbone(
         input_dim=prepared_inputs["windows"].shape[2],
         window_size=data_config.window_size,
