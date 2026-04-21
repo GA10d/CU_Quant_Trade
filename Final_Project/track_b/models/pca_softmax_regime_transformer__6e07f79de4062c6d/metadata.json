@@ -1,0 +1,22 @@
+{
+  "saved_at": "2026-04-21T19:30:55.296801+00:00",
+  "experiment_name": "pca_softmax_regime_transformer",
+  "summary": {
+    "experiment_name": "pca_softmax_regime_transformer",
+    "architecture": "pca_softmax_regime_transformer",
+    "input_dim": 8,
+    "window_size": 60,
+    "n_sequence_rows": 2834,
+    "n_windows": 2657,
+    "used_sequence_features": "SPY_ret, TLT_ret, GLD_ret, UUP_ret, HYG_ret, LQD_ret, VIX_ret, curve_slope_change",
+    "skipped_sequence_features": "",
+    "best_epoch": 10,
+    "best_val_loss": 0.9767864346504211,
+    "target_cluster_count": 4,
+    "silhouette": 0.44796523451805115,
+    "ari_vs_hmm": NaN,
+    "nmi_vs_hmm": NaN
+  },
+  "model_state_path": "F:\\Documents\\GitHub\\CU_Quant_Trade\\Final_Project\\track_b\\models\\pca_softmax_regime_transformer__6e07f79de4062c6d\\model_state.pt",
+  "device": "cpu"
+}

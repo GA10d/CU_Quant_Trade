@@ -18,6 +18,8 @@ from .advanced_transformer_variants import (
     run_cls_token_transformer_experiment,
     run_conv_transformer_experiment,
     run_mae_transformer_experiment,
+    run_pca_softmax_regime_transformer_experiment,
+    run_softmax_regime_transformer_experiment,
     run_tcn_transformer_experiment,
     run_transformer_autoencoder_experiment,
 )
@@ -104,6 +106,8 @@ __all__ = [
     "run_tcn_transformer_experiment",
     "run_mae_transformer_experiment",
     "run_transformer_autoencoder_experiment",
+    "run_softmax_regime_transformer_experiment",
+    "run_pca_softmax_regime_transformer_experiment",
     "run_recurrent_experiment",
     "run_pure_rnn_experiment",
     "run_rnn_lstm_hybrid_experiment",

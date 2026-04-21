@@ -5,6 +5,8 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
+from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_score
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
@@ -206,8 +208,10 @@ class ConvTransformerAutoencoder(nn.Module):
 class EncoderDecoderTransformerAutoencoder(nn.Module):
     def __init__(self, input_dim: int, model_config: Seq2SeqTransformerConfig, max_len: int):
         super().__init__()
-        if model_config.architecture not in {"mae_transformer", "transformer_autoencoder"}:
-            raise ValueError("architecture must be one of: mae_transformer, transformer_autoencoder")
+        if model_config.architecture not in {"mae_transformer", "transformer_autoencoder", "softmax_regime_transformer"}:
+            raise ValueError(
+                "architecture must be one of: mae_transformer, transformer_autoencoder, softmax_regime_transformer"
+            )
         if model_config.pooling not in {"attention", "mean", "last"}:
             raise ValueError("pooling must be one of: attention, mean, last")
         if model_config.d_model % model_config.n_heads != 0:
@@ -338,6 +342,211 @@ class EncoderDecoderTransformerAutoencoder(nn.Module):
         reconstruction = self.reconstruct_head(decoder_hidden)
         embedding = self.embedding_head(self.pool_hidden(memory, token_mask=token_mask))
         return reconstruction, embedding
+
+
+class SoftmaxBottleneckTransformerAutoencoder(nn.Module):
+    def __init__(self, input_dim: int, model_config: Seq2SeqTransformerConfig, max_len: int):
+        super().__init__()
+        if model_config.architecture != "softmax_regime_transformer":
+            raise ValueError("architecture must be softmax_regime_transformer")
+        if model_config.pooling not in {"attention", "mean", "last"}:
+            raise ValueError("pooling must be one of: attention, mean, last")
+        if model_config.d_model % model_config.n_heads != 0:
+            raise ValueError(
+                f"d_model={model_config.d_model} must be divisible by n_heads={model_config.n_heads}."
+            )
+
+        self.pooling = model_config.pooling
+        self.use_mask_embedding = model_config.use_mask_embedding
+        self.latent_dim = model_config.embedding_dim
+        self.max_len = max_len
+
+        self.input_norm = nn.LayerNorm(input_dim)
+        self.encoder_input_proj = nn.Linear(input_dim, model_config.d_model)
+        self.mask_proj = nn.Linear(input_dim, model_config.d_model, bias=False)
+        self.encoder_pos = SinusoidalPositionalEncoding(model_config.d_model, max_len=max_len)
+        self.pos_dropout = nn.Dropout(model_config.dropout)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=model_config.d_model,
+            nhead=model_config.n_heads,
+            dim_feedforward=int(model_config.d_model * model_config.feedforward_multiplier),
+            dropout=model_config.dropout,
+            batch_first=True,
+            activation="gelu",
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=model_config.num_encoder_layers,
+            norm=nn.LayerNorm(model_config.d_model),
+        )
+
+        self.pool_score = nn.Linear(model_config.d_model, 1) if self.pooling == "attention" else None
+        self.latent_head = nn.Sequential(
+            nn.LayerNorm(model_config.d_model),
+            nn.Linear(model_config.d_model, model_config.d_model),
+            nn.GELU(),
+            nn.Dropout(model_config.dropout),
+            nn.Linear(model_config.d_model, model_config.embedding_dim),
+        )
+
+        self.decoder_latent_proj = nn.Linear(model_config.embedding_dim, model_config.d_model)
+        self.decoder_queries = nn.Parameter(torch.zeros(1, max_len, model_config.d_model))
+        nn.init.normal_(self.decoder_queries, mean=0.0, std=0.02)
+        self.decoder_pos = SinusoidalPositionalEncoding(model_config.d_model, max_len=max_len)
+
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=model_config.d_model,
+            nhead=model_config.n_heads,
+            dim_feedforward=int(model_config.d_model * model_config.feedforward_multiplier),
+            dropout=model_config.dropout,
+            batch_first=True,
+            activation="gelu",
+            norm_first=True,
+        )
+        self.decoder = nn.TransformerDecoder(
+            decoder_layer,
+            num_layers=model_config.num_decoder_layers,
+            norm=nn.LayerNorm(model_config.d_model),
+        )
+
+        self.reconstruct_head = nn.Sequential(
+            nn.LayerNorm(model_config.d_model),
+            nn.Linear(model_config.d_model, model_config.d_model),
+            nn.GELU(),
+            nn.Dropout(model_config.dropout),
+            nn.Linear(model_config.d_model, input_dim),
+        )
+
+    def pool_hidden(self, hidden: torch.Tensor) -> torch.Tensor:
+        if self.pooling == "attention":
+            assert self.pool_score is not None
+            weights = torch.softmax(self.pool_score(hidden), dim=1)
+            return (hidden * weights).sum(dim=1)
+        if self.pooling == "mean":
+            return hidden.mean(dim=1)
+        return hidden[:, -1, :]
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        normalized_x = self.input_norm(x)
+        encoder_tokens = self.encoder_input_proj(normalized_x)
+        if mask is not None and self.use_mask_embedding:
+            encoder_tokens = encoder_tokens + self.mask_proj(mask.float())
+
+        encoder_hidden = self.pos_dropout(self.encoder_pos(encoder_tokens))
+        memory = self.encoder(encoder_hidden)
+        latent_logits = self.latent_head(self.pool_hidden(memory))
+        latent_probs = torch.softmax(latent_logits, dim=-1)
+
+        latent_memory = self.decoder_latent_proj(latent_probs).unsqueeze(1)
+        decoder_queries = self.decoder_queries[:, : x.size(1), :].expand(x.size(0), -1, -1)
+        decoder_queries = self.pos_dropout(self.decoder_pos(decoder_queries))
+        decoder_hidden = self.decoder(tgt=decoder_queries, memory=latent_memory)
+        reconstruction = self.reconstruct_head(decoder_hidden)
+        return reconstruction, latent_logits, latent_probs
+
+
+class PcaSoftmaxBottleneckTransformerAutoencoder(nn.Module):
+    def __init__(self, input_dim: int, model_config: Seq2SeqTransformerConfig, max_len: int):
+        super().__init__()
+        if model_config.architecture != "pca_softmax_regime_transformer":
+            raise ValueError("architecture must be pca_softmax_regime_transformer")
+        if model_config.pooling not in {"attention", "mean", "last"}:
+            raise ValueError("pooling must be one of: attention, mean, last")
+        if model_config.d_model % model_config.n_heads != 0:
+            raise ValueError(
+                f"d_model={model_config.d_model} must be divisible by n_heads={model_config.n_heads}."
+            )
+
+        self.pooling = model_config.pooling
+        self.use_mask_embedding = model_config.use_mask_embedding
+        self.latent_dim = model_config.embedding_dim
+        self.max_len = max_len
+
+        self.input_norm = nn.LayerNorm(input_dim)
+        self.encoder_input_proj = nn.Linear(input_dim, model_config.d_model)
+        self.mask_proj = nn.Linear(input_dim, model_config.d_model, bias=False)
+        self.encoder_pos = SinusoidalPositionalEncoding(model_config.d_model, max_len=max_len)
+        self.pos_dropout = nn.Dropout(model_config.dropout)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=model_config.d_model,
+            nhead=model_config.n_heads,
+            dim_feedforward=int(model_config.d_model * model_config.feedforward_multiplier),
+            dropout=model_config.dropout,
+            batch_first=True,
+            activation="gelu",
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=model_config.num_encoder_layers,
+            norm=nn.LayerNorm(model_config.d_model),
+        )
+
+        self.pool_score = nn.Linear(model_config.d_model, 1) if self.pooling == "attention" else None
+        self.latent_head = nn.Sequential(
+            nn.LayerNorm(model_config.d_model),
+            nn.Linear(model_config.d_model, model_config.d_model),
+            nn.GELU(),
+            nn.Dropout(model_config.dropout),
+            nn.Linear(model_config.d_model, model_config.embedding_dim),
+        )
+
+        self.decoder_latent_proj = nn.Linear(model_config.embedding_dim, model_config.d_model)
+        self.decoder_queries = nn.Parameter(torch.zeros(1, max_len, model_config.d_model))
+        nn.init.normal_(self.decoder_queries, mean=0.0, std=0.02)
+        self.decoder_pos = SinusoidalPositionalEncoding(model_config.d_model, max_len=max_len)
+
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=model_config.d_model,
+            nhead=model_config.n_heads,
+            dim_feedforward=int(model_config.d_model * model_config.feedforward_multiplier),
+            dropout=model_config.dropout,
+            batch_first=True,
+            activation="gelu",
+            norm_first=True,
+        )
+        self.decoder = nn.TransformerDecoder(
+            decoder_layer,
+            num_layers=model_config.num_decoder_layers,
+            norm=nn.LayerNorm(model_config.d_model),
+        )
+
+        self.reconstruct_head = nn.Sequential(
+            nn.LayerNorm(model_config.d_model),
+            nn.Linear(model_config.d_model, model_config.d_model),
+            nn.GELU(),
+            nn.Dropout(model_config.dropout),
+            nn.Linear(model_config.d_model, input_dim),
+        )
+
+    def pool_hidden(self, hidden: torch.Tensor) -> torch.Tensor:
+        if self.pooling == "attention":
+            assert self.pool_score is not None
+            weights = torch.softmax(self.pool_score(hidden), dim=1)
+            return (hidden * weights).sum(dim=1)
+        if self.pooling == "mean":
+            return hidden.mean(dim=1)
+        return hidden[:, -1, :]
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+        normalized_x = self.input_norm(x)
+        encoder_tokens = self.encoder_input_proj(normalized_x)
+        if mask is not None and self.use_mask_embedding:
+            encoder_tokens = encoder_tokens + self.mask_proj(mask.float())
+
+        encoder_hidden = self.pos_dropout(self.encoder_pos(encoder_tokens))
+        memory = self.encoder(encoder_hidden)
+        latent_embedding = self.latent_head(self.pool_hidden(memory))
+
+        latent_memory = self.decoder_latent_proj(latent_embedding).unsqueeze(1)
+        decoder_queries = self.decoder_queries[:, : x.size(1), :].expand(x.size(0), -1, -1)
+        decoder_queries = self.pos_dropout(self.decoder_pos(decoder_queries))
+        decoder_hidden = self.decoder(tgt=decoder_queries, memory=latent_memory)
+        reconstruction = self.reconstruct_head(decoder_hidden)
+        return reconstruction, latent_embedding
 
 
 def _train_masked_model(
@@ -565,6 +774,215 @@ def _extract_embeddings(model: nn.Module, all_windows: torch.Tensor, device: tor
     return np.vstack(embeddings)
 
 
+def _extract_softmax_regime_probabilities(
+    model: SoftmaxBottleneckTransformerAutoencoder,
+    all_windows: torch.Tensor,
+    device: torch.device,
+) -> np.ndarray:
+    model.eval()
+    loader = DataLoader(TensorDataset(all_windows), batch_size=128, shuffle=False)
+    probabilities = []
+    with torch.no_grad():
+        for (batch,) in loader:
+            batch = batch.to(device)
+            _, _, batch_probabilities = model(batch)
+            probabilities.append(batch_probabilities.cpu().numpy())
+    return np.vstack(probabilities)
+
+
+def _build_softmax_regime_outputs(
+    probabilities: np.ndarray,
+    target_cluster_count: int,
+) -> tuple[np.ndarray, pd.DataFrame, dict[str, object], np.ndarray]:
+    if probabilities.ndim != 2:
+        raise ValueError(f"Expected 2D probabilities for softmax regime output, got shape={probabilities.shape}.")
+    if probabilities.shape[1] != target_cluster_count:
+        raise ValueError(
+            "softmax_regime_transformer requires the encoder embedding dimension to match "
+            f"target_cluster_count={target_cluster_count}, got embedding_dim={probabilities.shape[1]}."
+        )
+
+    cluster_labels = probabilities.argmax(axis=1).astype(int)
+
+    silhouette_value = np.nan
+    unique_labels = np.unique(cluster_labels)
+    if len(unique_labels) > 1 and len(unique_labels) < len(probabilities):
+        try:
+            silhouette_value = float(silhouette_score(probabilities, cluster_labels))
+        except Exception:
+            silhouette_value = np.nan
+
+    cluster_scan = pd.DataFrame(
+        [{"n_clusters": int(target_cluster_count), "silhouette": silhouette_value, "selection_method": "softmax_argmax"}]
+    )
+    cluster_model = {
+        "selection_method": "softmax_argmax",
+        "target_cluster_count": int(target_cluster_count),
+        "active_cluster_count": int(len(unique_labels)),
+    }
+    return probabilities, cluster_scan, cluster_model, cluster_labels
+
+
+def _build_pca_softmax_regime_outputs(
+    embeddings: np.ndarray,
+    train_indices: np.ndarray,
+    target_cluster_count: int,
+) -> tuple[np.ndarray, pd.DataFrame, dict[str, object], np.ndarray]:
+    if embeddings.ndim != 2:
+        raise ValueError(f"Expected 2D embeddings for PCA-softmax regime output, got shape={embeddings.shape}.")
+    if embeddings.shape[1] < target_cluster_count:
+        raise ValueError(
+            "pca_softmax_regime_transformer requires latent_dim >= target_cluster_count, "
+            f"got latent_dim={embeddings.shape[1]} and target_cluster_count={target_cluster_count}."
+        )
+
+    pca_model = PCA(n_components=target_cluster_count)
+    pca_model.fit(embeddings[train_indices])
+    pca_embeddings = pca_model.transform(embeddings)
+
+    shifted = pca_embeddings - pca_embeddings.max(axis=1, keepdims=True)
+    exp_values = np.exp(shifted)
+    probabilities = exp_values / exp_values.sum(axis=1, keepdims=True)
+    cluster_labels = probabilities.argmax(axis=1).astype(int)
+
+    silhouette_value = np.nan
+    unique_labels = np.unique(cluster_labels)
+    if len(unique_labels) > 1 and len(unique_labels) < len(probabilities):
+        try:
+            silhouette_value = float(silhouette_score(probabilities, cluster_labels))
+        except Exception:
+            silhouette_value = np.nan
+
+    cluster_scan = pd.DataFrame(
+        [{"n_clusters": int(target_cluster_count), "silhouette": silhouette_value, "selection_method": "pca_softmax_argmax"}]
+    )
+    cluster_model = {
+        "selection_method": "pca_softmax_argmax",
+        "target_cluster_count": int(target_cluster_count),
+        "active_cluster_count": int(len(unique_labels)),
+        "explained_variance_ratio": pca_model.explained_variance_ratio_.tolist(),
+    }
+    return probabilities, cluster_scan, cluster_model, cluster_labels
+
+
+def _train_softmax_bottleneck_model(
+    windows: np.ndarray,
+    model: SoftmaxBottleneckTransformerAutoencoder,
+    training_config: TrainingConfig,
+    log_prefix: str,
+    split_indices: dict[str, np.ndarray] | None = None,
+    balance_weight: float = 0.10,
+    confidence_weight: float = 0.01,
+) -> tuple[SoftmaxBottleneckTransformerAutoencoder, pd.DataFrame, torch.Tensor, torch.device]:
+    device = resolve_device(training_config.device)
+    if split_indices is None:
+        split_indices = split_ordered_train_random_holdout_indices(
+            n_obs=len(windows),
+            train_ratio=training_config.train_ratio,
+            validation_ratio=training_config.validation_ratio,
+            test_ratio=training_config.test_ratio,
+            random_state=training_config.random_state,
+        )
+
+    train_windows = torch.tensor(windows[split_indices["train"]], dtype=torch.float32)
+    val_windows = torch.tensor(windows[split_indices["validation"]], dtype=torch.float32)
+    all_windows = torch.tensor(windows, dtype=torch.float32)
+
+    train_loader = DataLoader(
+        TensorDataset(train_windows),
+        batch_size=training_config.batch_size,
+        shuffle=True,
+        generator=make_torch_dataloader_generator(training_config.random_state),
+    )
+    val_loader = (
+        DataLoader(TensorDataset(val_windows), batch_size=training_config.batch_size, shuffle=False)
+        if len(val_windows) > 0
+        else None
+    )
+
+    model = model.to(device)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=training_config.learning_rate,
+        weight_decay=training_config.weight_decay,
+    )
+
+    uniform_target = None
+    history: list[dict] = []
+    best_state_dict = None
+    best_val_loss = float("inf")
+    no_improve_epochs = 0
+
+    def compute_loss(batch: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        reconstruction, _, probabilities = model(batch)
+        recon_loss = torch.mean((reconstruction - batch) ** 2)
+        probs = probabilities.clamp_min(1e-8)
+
+        nonlocal uniform_target
+        if uniform_target is None or uniform_target.numel() != probs.size(1):
+            uniform_target = torch.full((probs.size(1),), 1.0 / probs.size(1), device=probs.device)
+
+        mean_probs = probs.mean(dim=0)
+        balance_loss = torch.sum(mean_probs * (torch.log(mean_probs) - torch.log(uniform_target)))
+        confidence_loss = -(probs * torch.log(probs)).sum(dim=1).mean()
+        loss = recon_loss + balance_weight * balance_loss + confidence_weight * confidence_loss
+        return loss, recon_loss, balance_loss, confidence_loss
+
+    for epoch in range(1, training_config.num_epochs + 1):
+        model.train()
+        train_losses = []
+        for (batch,) in train_loader:
+            batch = batch.to(device)
+            optimizer.zero_grad()
+            loss, _, _, _ = compute_loss(batch)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+            train_losses.append(float(loss.item()))
+
+        train_loss = float(np.mean(train_losses))
+
+        if val_loader is not None:
+            model.eval()
+            val_losses = []
+            with torch.no_grad():
+                for (batch,) in val_loader:
+                    batch = batch.to(device)
+                    val_loss, _, _, _ = compute_loss(batch)
+                    val_losses.append(float(val_loss.item()))
+            val_loss_value = float(np.mean(val_losses))
+        else:
+            val_loss_value = train_loss
+
+        history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss_value})
+        if training_config.log_every and (epoch % training_config.log_every == 0 or epoch == training_config.num_epochs):
+            print(
+                f"[{log_prefix}] epoch={epoch}/{training_config.num_epochs} "
+                f"train_loss={train_loss:.6f} val_loss={val_loss_value:.6f}",
+                flush=True,
+            )
+
+        if val_loss_value <= best_val_loss:
+            best_val_loss = val_loss_value
+            best_state_dict = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+            no_improve_epochs = 0
+        else:
+            no_improve_epochs += 1
+
+        if (
+            epoch < training_config.num_epochs
+            and epoch >= training_config.min_epochs
+            and no_improve_epochs >= training_config.early_stopping_patience
+        ):
+            print(f"[{log_prefix}] early stopping at epoch {epoch}", flush=True)
+            break
+
+    if best_state_dict is not None:
+        model.load_state_dict(best_state_dict)
+
+    return model, pd.DataFrame(history), all_windows, device
+
+
 def run_cls_token_transformer_experiment(
     experiment_name: str,
     data_config: SequenceDataConfig | None = None,
@@ -648,16 +1066,61 @@ def _run_transformer_variant_experiment(
             log_prefix=architecture,
             split_indices=prepared_inputs["window_split_indices"],
         )
+    elif architecture == "softmax_regime_transformer":
+        model = SoftmaxBottleneckTransformerAutoencoder(
+            input_dim=prepared_inputs["windows"].shape[2],
+            model_config=model_config,
+            max_len=data_config.window_size,
+        )
+        model, history_df, all_windows, device = _train_softmax_bottleneck_model(
+            windows=prepared_inputs["windows"],
+            model=model,
+            training_config=training_config,
+            log_prefix=architecture,
+            split_indices=prepared_inputs["window_split_indices"],
+        )
+    elif architecture == "pca_softmax_regime_transformer":
+        model = PcaSoftmaxBottleneckTransformerAutoencoder(
+            input_dim=prepared_inputs["windows"].shape[2],
+            model_config=model_config,
+            max_len=data_config.window_size,
+        )
+        model, history_df, all_windows, device = _train_full_reconstruction_model(
+            windows=prepared_inputs["windows"],
+            model=model,
+            training_config=training_config,
+            log_prefix=architecture,
+            split_indices=prepared_inputs["window_split_indices"],
+        )
     else:
         raise ValueError(f"Unsupported transformer architecture: {architecture}")
 
-    embeddings = _extract_embeddings(model, all_windows, device)
-    cluster_scan, cluster_model, cluster_labels, target_cluster_count = cluster_embeddings(
-        embeddings=embeddings,
-        clustering_config=clustering_config,
-        random_state=training_config.random_state,
-        target_cluster_count=target_cluster_count,
-    )
+    if architecture == "softmax_regime_transformer":
+        if target_cluster_count is None:
+            target_cluster_count = 4
+        raw_probabilities = _extract_softmax_regime_probabilities(model, all_windows, device)
+        embeddings, cluster_scan, cluster_model, cluster_labels = _build_softmax_regime_outputs(
+            probabilities=raw_probabilities,
+            target_cluster_count=int(target_cluster_count),
+        )
+    elif architecture == "pca_softmax_regime_transformer":
+        if target_cluster_count is None:
+            target_cluster_count = 4
+        raw_embeddings = _extract_embeddings(model, all_windows, device)
+        embeddings, cluster_scan, cluster_model, cluster_labels = _build_pca_softmax_regime_outputs(
+            embeddings=raw_embeddings,
+            train_indices=prepared_inputs["window_split_indices"]["train"],
+            target_cluster_count=int(target_cluster_count),
+        )
+    else:
+        raw_embeddings = _extract_embeddings(model, all_windows, device)
+        embeddings = raw_embeddings
+        cluster_scan, cluster_model, cluster_labels, target_cluster_count = cluster_embeddings(
+            embeddings=embeddings,
+            clustering_config=clustering_config,
+            random_state=training_config.random_state,
+            target_cluster_count=target_cluster_count,
+        )
 
     summary, cluster_summary, comparison_table = summarize_experiment_outputs(
         experiment_name=experiment_name,
@@ -778,6 +1241,56 @@ def run_transformer_autoencoder_experiment(
     )
 
 
+def run_softmax_regime_transformer_experiment(
+    experiment_name: str,
+    data_config: SequenceDataConfig | None = None,
+    model_config: Seq2SeqTransformerConfig | None = None,
+    training_config: TrainingConfig | None = None,
+    clustering_config: ClusteringConfig | None = None,
+    hmm_config: HMMReferenceConfig | None = None,
+) -> dict:
+    config = model_config or Seq2SeqTransformerConfig(
+        architecture="softmax_regime_transformer",
+        embedding_dim=4,
+    )
+    config.architecture = "softmax_regime_transformer"
+    config.embedding_dim = 4
+    return _run_transformer_variant_experiment(
+        experiment_name=experiment_name,
+        architecture="softmax_regime_transformer",
+        model_config=config,
+        data_config=data_config,
+        training_config=training_config,
+        clustering_config=clustering_config,
+        hmm_config=hmm_config,
+    )
+
+
+def run_pca_softmax_regime_transformer_experiment(
+    experiment_name: str,
+    data_config: SequenceDataConfig | None = None,
+    model_config: Seq2SeqTransformerConfig | None = None,
+    training_config: TrainingConfig | None = None,
+    clustering_config: ClusteringConfig | None = None,
+    hmm_config: HMMReferenceConfig | None = None,
+) -> dict:
+    config = model_config or Seq2SeqTransformerConfig(
+        architecture="pca_softmax_regime_transformer",
+        embedding_dim=8,
+    )
+    config.architecture = "pca_softmax_regime_transformer"
+    config.embedding_dim = 8
+    return _run_transformer_variant_experiment(
+        experiment_name=experiment_name,
+        architecture="pca_softmax_regime_transformer",
+        model_config=config,
+        data_config=data_config,
+        training_config=training_config,
+        clustering_config=clustering_config,
+        hmm_config=hmm_config,
+    )
+
+
 __all__ = [
     "HMMLEARN_AVAILABLE",
     "ConvTransformerConfig",
@@ -787,4 +1300,6 @@ __all__ = [
     "run_tcn_transformer_experiment",
     "run_mae_transformer_experiment",
     "run_transformer_autoencoder_experiment",
+    "run_softmax_regime_transformer_experiment",
+    "run_pca_softmax_regime_transformer_experiment",
 ]

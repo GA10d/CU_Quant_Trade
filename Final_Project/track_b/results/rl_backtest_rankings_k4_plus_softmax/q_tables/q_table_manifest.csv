@@ -1,0 +1,2 @@
+experiment_name,q_table_path,metadata_path
+softmax_regime_transformer__q_learning,..\artifacts\softmax_regime_rl_k4\q_tables\softmax_regime_transformer__q_learning_q_table.csv,..\artifacts\softmax_regime_rl_k4\q_tables\softmax_regime_transformer__q_learning_metadata.json

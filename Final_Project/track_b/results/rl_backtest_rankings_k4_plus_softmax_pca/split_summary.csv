@@ -1,0 +1,4 @@
+split,n_windows,start_date,end_date,selection
+train,1924,2015-03-31,2022-11-16,ordered_contiguous_block
+validation,508,2023-02-14,2025-02-24,ordered_contiguous_block
+test,225,2025-05-20,2026-04-13,ordered_contiguous_block
