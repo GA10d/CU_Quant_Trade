@@ -1,0 +1,3 @@
+overall_rank,experiment_name,source_family,validation_rank,test_rank,average_rank,validation_sharpe,test_sharpe
+27,RL:snn_event_lif_pruned__q_learning,rl,32,13,22.5,0.8464162827672813,1.816813334800322
+32,CA:snn_event_lif_pruned,cluster_action,31,31,31.0,0.9142437949706247,1.3512707789657097
