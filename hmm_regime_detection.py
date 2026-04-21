@@ -486,7 +486,7 @@ def main():
     # Load features
     print("Loading features...")
     features = pd.read_csv("data/hmm_features.csv", index_col=0, parse_dates=True)
-    market_data = pd.read_csv("data/market_data.csv", index_col=0, parse_dates=True)
+    market_data = pd.read_csv("Final_Project/data/market_data.csv", index_col=0, parse_dates=True)
     
     print(f"✓ Loaded features: {len(features)} observations, {len(features.columns)} features")
     print()
