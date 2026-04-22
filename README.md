@@ -142,6 +142,132 @@ Generated benchmark outputs are saved under:
 - [RL results](Final_Project/track_b/results/rl_backtest_rankings_k4)
 - [Combined results](Final_Project/track_b/results/combined_nav_rankings_k4)
 
+
+## Track B Backtest (`track_b_backtest.py`)
+
+### How to Run
+
+Run from the `Final_Project/track_b/` directory:
+
+#### Run a single model
+```bash
+python track_b_backtest.py --architectures encoder_only
+````
+
+#### Run multiple models
+
+```bash
+python track_b_backtest.py --architectures encoder_only tcn_transformer pure_rnn
+```
+
+#### Run all default models
+
+```bash
+python track_b_backtest.py
+```
+
+---
+
+### Output Location
+
+By default, results are saved to:
+
+```text
+Final_Project/artifacts/track_b_backtest_k{cluster_count}/
+```
+
+You can also specify a custom path:
+
+```bash
+python track_b_backtest.py --output-dir ../artifacts/my_run
+```
+
+---
+
+### What Gets Saved
+
+#### 1. Global Files (all models)
+
+* `validation_ranking.csv`
+  → model ranking based on validation performance
+
+* `test_ranking.csv`
+  → model ranking based on test performance
+
+* `overall_ranking.csv`
+  → combined ranking (validation + test)
+
+* `action_library.csv`
+  → portfolio weights for each action (e.g. defensive, aggressive)
+
+---
+
+#### 2. Per-Model Folder
+
+Each model gets its own folder:
+
+```text
+{experiment_name}/
+```
+
+Inside:
+
+* `summary.csv`
+  → key metrics (validation / test / full period)
+
+* `mapping_search.csv`
+  → all tested `cluster -> action` mappings and their scores
+
+* `daily_backtest.csv`
+  → daily results:
+
+  * cluster
+  * action
+  * return
+  * turnover
+  * NAV
+
+* `target_weights.csv`
+  → intended portfolio weights (before lag)
+
+* `executed_weights.csv`
+  → actual weights used in backtest
+
+* `nav.png`
+  → NAV curve for this model
+
+---
+
+#### 3. Plots (comparison)
+
+Located in:
+
+```text
+plots/
+```
+
+* `full_period_nav.png`
+  → NAV comparison over entire period
+
+* `validation_nav.png`
+  → NAV on validation set
+
+* `test_nav.png`
+  → NAV on test set
+
+---
+
+### Summary
+
+This script:
+
+* takes Track B cluster outputs
+* maps clusters to portfolio actions
+* searches the best mapping on validation
+* evaluates on test
+* saves rankings, metrics, weights, and NAV plots
+
+
 ---
 
 <details>
