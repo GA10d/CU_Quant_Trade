@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+Final_Project/artifacts/
+Final_Project/track_b/models/
