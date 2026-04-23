@@ -8,6 +8,7 @@ from typing import Iterable
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from sklearn.cluster import MiniBatchKMeans
 
 from encoder_only_transformer import (
     HMMLEARN_AVAILABLE,
@@ -90,6 +91,42 @@ def load_tradable_returns(
     returns = returns.dropna(how="all")
     returns.index.name = "Date"
     return returns
+
+
+def estimate_annual_risk_free_rate(
+    macro_data: pd.DataFrame | None,
+    dates: pd.Index,
+    config: ActionBacktestConfig,
+    preferred_columns: tuple[str, ...] = ("DGS3MO", "FEDFUNDS"),
+) -> float:
+    if macro_data is None or len(dates) == 0:
+        return float(config.risk_free_rate)
+
+    macro = macro_data.copy()
+    macro.index = pd.to_datetime(macro.index)
+    target_dates = pd.Index(pd.to_datetime(dates), name="Date").sort_values()
+    percent_rate_columns = {"DGS3MO", "FEDFUNDS", "DGS2", "DGS10"}
+
+    for column in preferred_columns:
+        if column not in macro.columns:
+            continue
+
+        series = pd.to_numeric(macro[column], errors="coerce").sort_index()
+        aligned = (
+            series.reindex(series.index.union(target_dates).sort_values())
+            .ffill()
+            .reindex(target_dates)
+            .dropna()
+        )
+        if aligned.empty:
+            continue
+
+        annual_rate = float(aligned.mean())
+        if column in percent_rate_columns or abs(annual_rate) > 1.0:
+            annual_rate /= 100.0
+        return annual_rate
+
+    return float(config.risk_free_rate)
 
 
 def build_hmm_baseline_experiment_result(
@@ -258,6 +295,112 @@ def summarize_split_dates(splits: dict[str, pd.Index]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _sorted_unique_ints(values: Iterable) -> list[int]:
+    return sorted(int(value) for value in pd.Series(list(values)).dropna().unique())
+
+
+def _split_date_union(splits: dict[str, pd.Index], split_names: Iterable[str]) -> pd.Index:
+    date_parts = [
+        pd.Index(splits.get(split_name, pd.Index([], name="Date")), name="Date")
+        for split_name in split_names
+    ]
+    if not date_parts:
+        return pd.Index([], name="Date")
+    dates = date_parts[0]
+    for part in date_parts[1:]:
+        dates = dates.union(part)
+    return pd.Index(dates.sort_values(), name="Date")
+
+
+def _infer_target_cluster_count(experiment_result: dict, fallback_cluster_series: pd.Series) -> int:
+    summary = experiment_result.get("summary", {})
+    for key in ("target_cluster_count", "n_clusters"):
+        value = summary.get(key)
+        if value is None or pd.isna(value):
+            continue
+        value = int(value)
+        if value > 1:
+            return value
+
+    observed = fallback_cluster_series.dropna()
+    if observed.empty:
+        raise ValueError("Cannot infer target cluster count from empty cluster labels.")
+    return int(observed.astype(int).nunique())
+
+
+def build_leak_free_cluster_series(
+    experiment_result: dict,
+    splits: dict[str, pd.Index],
+    config: ActionBacktestConfig,
+    fit_split_names: tuple[str, ...] = ("train", "validation"),
+) -> tuple[pd.Series, dict]:
+    """Fit evaluation clusters without using test embeddings, then predict all windows.
+
+    Cached experiment results historically include cluster_labels fit on all embeddings.
+    The CA/RL testbenches should not use those labels directly, because test windows
+    would influence the cluster state definition. This helper refits a lightweight
+    MiniBatchKMeans evaluator on train+validation embeddings only.
+    """
+    window_end_dates = pd.Index(pd.to_datetime(experiment_result["window_end_dates"]), name="Date")
+    provided_cluster_series = pd.Series(
+        experiment_result["cluster_labels"],
+        index=window_end_dates,
+        name="cluster",
+    )
+    target_cluster_count = _infer_target_cluster_count(experiment_result, provided_cluster_series)
+    cluster_universe = list(range(target_cluster_count))
+
+    embeddings = experiment_result.get("embeddings")
+    if embeddings is None:
+        raise ValueError(
+            "Experiment result does not contain embeddings. Cannot build leak-free "
+            "evaluation clusters without falling back to precomputed cluster_labels."
+        )
+
+    embeddings_array = np.asarray(embeddings)
+    if embeddings_array.ndim != 2 or len(embeddings_array) != len(window_end_dates):
+        raise ValueError(
+            "Experiment embeddings must be a 2D array with one row per window. "
+            f"Got shape={getattr(embeddings_array, 'shape', None)} for {len(window_end_dates)} windows."
+        )
+    if not np.isfinite(embeddings_array).all():
+        raise ValueError("Experiment embeddings contain non-finite values.")
+
+    fit_dates = _split_date_union(splits, fit_split_names)
+    fit_mask = window_end_dates.isin(fit_dates)
+    fit_positions = np.flatnonzero(fit_mask)
+    if len(fit_positions) < target_cluster_count:
+        raise ValueError(
+            "Not enough train/validation embeddings to fit a leak-free clusterer: "
+            f"{len(fit_positions)} windows for {target_cluster_count} clusters."
+        )
+
+    fit_embeddings = embeddings_array[fit_positions]
+    clustering_config = experiment_result.get("clustering_config")
+    n_init = int(getattr(clustering_config, "n_init", 10))
+    batch_size = int(getattr(clustering_config, "batch_size", 1024))
+    cluster_model = MiniBatchKMeans(
+        n_clusters=target_cluster_count,
+        random_state=config.split_random_state,
+        n_init=n_init,
+        batch_size=batch_size,
+    )
+    cluster_model.fit(fit_embeddings)
+    cluster_labels = cluster_model.predict(embeddings_array)
+    cluster_series = pd.Series(cluster_labels.astype(int), index=window_end_dates, name="cluster")
+
+    metadata = {
+        "cluster_label_source": "embeddings_fit_on_train_validation",
+        "cluster_fit_splits": ",".join(fit_split_names),
+        "cluster_fit_n_windows": int(len(fit_positions)),
+        "cluster_fit_start": pd.Timestamp(fit_dates.min()) if len(fit_dates) else pd.NaT,
+        "cluster_fit_end": pd.Timestamp(fit_dates.max()) if len(fit_dates) else pd.NaT,
+        "cluster_model_n_clusters": target_cluster_count,
+        "cluster_universe": cluster_universe,
+    }
+    return cluster_series, metadata
+
+
 def _fallback_action_name(
     action_library: dict[str, pd.Series],
     explicit_name: str | None,
@@ -380,12 +523,15 @@ def calculate_backtest_metrics(
     portfolio_returns: pd.Series,
     turnover: pd.Series,
     config: ActionBacktestConfig,
+    risk_free_rate: float | None = None,
 ) -> dict:
     returns = portfolio_returns.dropna()
     turnover = turnover.loc[returns.index].fillna(0.0)
+    annual_risk_free_rate = float(config.risk_free_rate if risk_free_rate is None else risk_free_rate)
     if returns.empty:
         return {
             "n_days": 0,
+            "risk_free_rate": annual_risk_free_rate,
             "total_return": np.nan,
             "annual_return": np.nan,
             "annual_vol": np.nan,
@@ -402,7 +548,7 @@ def calculate_backtest_metrics(
     annual_return = float(cumulative.iloc[-1] ** (config.annualization_factor / len(returns)) - 1.0)
     annual_vol = float(returns.std(ddof=0) * np.sqrt(config.annualization_factor))
     if annual_vol > 0:
-        sharpe = float((annual_return - config.risk_free_rate) / annual_vol)
+        sharpe = float((annual_return - annual_risk_free_rate) / annual_vol)
     else:
         sharpe = np.nan
 
@@ -416,6 +562,7 @@ def calculate_backtest_metrics(
     final_nav = float(config.initial_capital * cumulative.iloc[-1])
     return {
         "n_days": int(len(returns)),
+        "risk_free_rate": annual_risk_free_rate,
         "total_return": total_return,
         "annual_return": annual_return,
         "annual_vol": annual_vol,
@@ -453,13 +600,15 @@ def search_best_cluster_action_mapping(
     action_library: dict[str, pd.Series],
     validation_dates: pd.Index,
     config: ActionBacktestConfig,
+    validation_risk_free_rate: float | None = None,
 ) -> dict:
     validation_clusters = cluster_series.loc[cluster_series.index.intersection(validation_dates)].dropna()
     if validation_clusters.empty:
         raise ValueError("Validation cluster series is empty after alignment.")
 
+    candidate_cluster_ids = _sorted_unique_ints(validation_clusters)
     candidate_mappings = enumerate_cluster_action_mappings(
-        cluster_ids=cluster_series.dropna().unique(),
+        cluster_ids=candidate_cluster_ids,
         action_names=action_library.keys(),
         allow_action_reuse=config.allow_action_reuse,
     )
@@ -484,7 +633,12 @@ def search_best_cluster_action_mapping(
             backtest_result["portfolio_returns"].index.intersection(validation_dates)
         ]
         validation_turnover = backtest_result["turnover"].loc[validation_returns.index]
-        validation_metrics = calculate_backtest_metrics(validation_returns, validation_turnover, config)
+        validation_metrics = calculate_backtest_metrics(
+            validation_returns,
+            validation_turnover,
+            config,
+            risk_free_rate=validation_risk_free_rate,
+        )
         objective_value = _objective_value(validation_metrics, config.objective)
 
         row = {
@@ -509,6 +663,7 @@ def search_best_cluster_action_mapping(
         "best_mapping": best_mapping,
         "best_mapping_text": serialize_mapping(best_mapping),
         "best_score": best_score,
+        "candidate_cluster_ids": candidate_cluster_ids,
         "validation_metrics": best_metrics,
         "search_results": search_df,
         "backtest_result": best_backtest,
@@ -521,8 +676,7 @@ def evaluate_model_cluster_actions(
     action_library: dict[str, pd.Series],
     config: ActionBacktestConfig,
 ) -> dict:
-    window_end_dates = pd.Index(experiment_result["window_end_dates"], name="Date")
-    cluster_series = pd.Series(experiment_result["cluster_labels"], index=window_end_dates, name="cluster")
+    window_end_dates = pd.Index(pd.to_datetime(experiment_result["window_end_dates"]), name="Date")
     if "splits" in experiment_result and experiment_result["splits"] is not None:
         splits = {
             split_name: pd.Index(split_dates, name="Date")
@@ -538,12 +692,22 @@ def evaluate_model_cluster_actions(
         )
         split_summary = summarize_split_dates(splits)
 
+    cluster_series, cluster_metadata = build_leak_free_cluster_series(
+        experiment_result=experiment_result,
+        splits=splits,
+        config=config,
+    )
+    macro_data = experiment_result.get("macro_data")
+    validation_risk_free_rate = estimate_annual_risk_free_rate(macro_data, splits["validation"], config)
+    test_risk_free_rate = estimate_annual_risk_free_rate(macro_data, splits["test"], config)
+
     search_result = search_best_cluster_action_mapping(
         cluster_series=cluster_series,
         asset_returns=asset_returns,
         action_library=action_library,
         validation_dates=splits["validation"],
         config=config,
+        validation_risk_free_rate=validation_risk_free_rate,
     )
     best_backtest = search_result["backtest_result"]
 
@@ -551,21 +715,45 @@ def evaluate_model_cluster_actions(
         best_backtest["portfolio_returns"].index.intersection(splits["validation"])
     ]
     validation_turnover = best_backtest["turnover"].loc[validation_returns.index]
-    validation_metrics = calculate_backtest_metrics(validation_returns, validation_turnover, config)
+    validation_metrics = calculate_backtest_metrics(
+        validation_returns,
+        validation_turnover,
+        config,
+        risk_free_rate=validation_risk_free_rate,
+    )
 
     test_returns = best_backtest["portfolio_returns"].loc[
         best_backtest["portfolio_returns"].index.intersection(splits["test"])
     ]
     test_turnover = best_backtest["turnover"].loc[test_returns.index]
-    test_metrics = calculate_backtest_metrics(test_returns, test_turnover, config)
+    test_metrics = calculate_backtest_metrics(
+        test_returns,
+        test_turnover,
+        config,
+        risk_free_rate=test_risk_free_rate,
+    )
+    validation_cluster_ids = _sorted_unique_ints(
+        cluster_series.loc[cluster_series.index.intersection(splits["validation"])]
+    )
+    test_cluster_ids = _sorted_unique_ints(
+        cluster_series.loc[cluster_series.index.intersection(splits["test"])]
+    )
+    mapped_cluster_ids = _sorted_unique_ints(search_result["best_mapping"].keys())
+    unmapped_test_clusters = sorted(set(test_cluster_ids) - set(mapped_cluster_ids))
 
     summary = {
         "experiment_name": experiment_result["experiment_name"],
         "architecture": experiment_result["summary"].get("architecture"),
         "n_clusters": int(np.unique(cluster_series.values).size),
-        "target_cluster_count": int(experiment_result["summary"].get("target_cluster_count", np.unique(cluster_series.values).size)),
+        "target_cluster_count": int(cluster_metadata["cluster_model_n_clusters"]),
         "best_mapping": search_result["best_mapping_text"],
         "objective": config.objective,
+        "cluster_label_source": cluster_metadata["cluster_label_source"],
+        "cluster_fit_splits": cluster_metadata["cluster_fit_splits"],
+        "cluster_fit_n_windows": cluster_metadata["cluster_fit_n_windows"],
+        "mapping_fit_split": "validation",
+        "mapping_candidate_clusters": ",".join(map(str, validation_cluster_ids)),
+        "unmapped_test_clusters": ",".join(map(str, unmapped_test_clusters)),
     }
     summary.update({f"validation_{key}": value for key, value in validation_metrics.items()})
     summary.update({f"test_{key}": value for key, value in test_metrics.items()})
@@ -580,6 +768,7 @@ def evaluate_model_cluster_actions(
         "backtest_result": best_backtest,
         "validation_metrics": validation_metrics,
         "test_metrics": test_metrics,
+        "cluster_metadata": cluster_metadata,
     }
 
 
@@ -603,6 +792,9 @@ def evaluate_random_choice_baseline(
     window_end_dates = pd.Index(prepared_inputs["window_end_dates"], name="Date")
     splits = prepared_inputs["splits"]
     split_summary = prepared_inputs["split_summary"]
+    macro_data = prepared_inputs.get("macro_data")
+    validation_risk_free_rate = estimate_annual_risk_free_rate(macro_data, splits["validation"], config)
+    test_risk_free_rate = estimate_annual_risk_free_rate(macro_data, splits["test"], config)
 
     action_names = list(action_library.keys())
     if not action_names:
@@ -630,13 +822,23 @@ def evaluate_random_choice_baseline(
         backtest_result["portfolio_returns"].index.intersection(splits["validation"])
     ]
     validation_turnover = backtest_result["turnover"].loc[validation_returns.index]
-    validation_metrics = calculate_backtest_metrics(validation_returns, validation_turnover, config)
+    validation_metrics = calculate_backtest_metrics(
+        validation_returns,
+        validation_turnover,
+        config,
+        risk_free_rate=validation_risk_free_rate,
+    )
 
     test_returns = backtest_result["portfolio_returns"].loc[
         backtest_result["portfolio_returns"].index.intersection(splits["test"])
     ]
     test_turnover = backtest_result["turnover"].loc[test_returns.index]
-    test_metrics = calculate_backtest_metrics(test_returns, test_turnover, config)
+    test_metrics = calculate_backtest_metrics(
+        test_returns,
+        test_turnover,
+        config,
+        risk_free_rate=test_risk_free_rate,
+    )
 
     best_mapping_text = f"random_daily_choice(seed={random_state})"
     search_results = pd.DataFrame(
@@ -1049,9 +1251,11 @@ __all__ = [
     "ActionBacktestConfig",
     "build_default_action_library",
     "load_tradable_returns",
+    "estimate_annual_risk_free_rate",
     "build_hmm_baseline_experiment_result",
     "split_window_dates",
     "summarize_split_dates",
+    "build_leak_free_cluster_series",
     "enumerate_cluster_action_mappings",
     "serialize_mapping",
     "build_weight_frame_from_mapping",

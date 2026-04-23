@@ -10,8 +10,10 @@ import pandas as pd
 from cluster_action_backtest import (
     ActionBacktestConfig,
     _objective_value,
+    build_leak_free_cluster_series,
     build_model_ranking_tables,
     calculate_backtest_metrics,
+    estimate_annual_risk_free_rate,
     save_evaluation_artifacts,
     split_window_dates,
     summarize_split_dates,
@@ -286,6 +288,7 @@ def train_q_learning_agent(
     backtest_config: ActionBacktestConfig,
     agent_config: QLearningAgentConfig,
     cluster_to_idx: dict[int, int] | None = None,
+    validation_risk_free_rate: float | None = None,
 ) -> dict:
     train_env = DiscreteActionBacktestEnv(
         cluster_series=train_clusters,
@@ -348,6 +351,7 @@ def train_q_learning_agent(
                 portfolio_returns=validation_backtest["portfolio_returns"],
                 turnover=validation_backtest["turnover"],
                 config=backtest_config,
+                risk_free_rate=validation_risk_free_rate,
             )
             validation_score = _objective_value(validation_metrics, backtest_config.objective)
             row.update({f"validation_{key}": value for key, value in validation_metrics.items()})
@@ -377,6 +381,7 @@ def train_q_learning_agent(
             portfolio_returns=validation_backtest["portfolio_returns"],
             turnover=validation_backtest["turnover"],
             config=backtest_config,
+            risk_free_rate=validation_risk_free_rate,
         )
         best_objective_value = _objective_value(best_validation_metrics, backtest_config.objective)
 
@@ -401,13 +406,7 @@ def evaluate_model_with_q_learning(
     agent_config: QLearningAgentConfig,
     pretrained_policy: dict | None = None,
 ) -> dict:
-    window_end_dates = pd.Index(experiment_result["window_end_dates"], name="Date")
-    raw_cluster_series = pd.Series(
-        experiment_result["cluster_labels"],
-        index=window_end_dates,
-        name="cluster",
-        dtype=int,
-    )
+    window_end_dates = pd.Index(pd.to_datetime(experiment_result["window_end_dates"]), name="Date")
     if "splits" in experiment_result and experiment_result["splits"] is not None:
         splits = {
             split_name: pd.Index(split_dates, name="Date")
@@ -423,6 +422,12 @@ def evaluate_model_with_q_learning(
         )
         split_summary = summarize_split_dates(splits)
 
+    raw_cluster_series, cluster_metadata = build_leak_free_cluster_series(
+        experiment_result=experiment_result,
+        splits=splits,
+        config=backtest_config,
+    )
+
     decision_clusters, decision_returns = prepare_rl_decision_data(
         cluster_series=raw_cluster_series,
         asset_returns=asset_returns,
@@ -437,9 +442,33 @@ def evaluate_model_with_q_learning(
             "Train/validation/test decision dates are empty after RL alignment. "
             "Try reducing execution_lag or checking date overlap."
         )
+    macro_data = experiment_result.get("macro_data")
+    train_risk_free_rate = estimate_annual_risk_free_rate(macro_data, train_dates, backtest_config)
+    validation_risk_free_rate = estimate_annual_risk_free_rate(macro_data, validation_dates, backtest_config)
+    test_risk_free_rate = estimate_annual_risk_free_rate(macro_data, test_dates, backtest_config)
 
-    global_cluster_ids = sorted(int(cluster_id) for cluster_id in decision_clusters.unique())
-    cluster_to_idx = {cluster_id: idx for idx, cluster_id in enumerate(global_cluster_ids)}
+    cluster_universe = cluster_metadata.get("cluster_universe")
+    if cluster_universe:
+        safe_cluster_ids = sorted(int(cluster_id) for cluster_id in cluster_universe)
+    else:
+        calibration_dates = train_dates.union(validation_dates)
+        safe_cluster_ids = sorted(int(cluster_id) for cluster_id in decision_clusters.loc[calibration_dates].unique())
+    cluster_to_idx = {cluster_id: idx for idx, cluster_id in enumerate(safe_cluster_ids)}
+
+    if pretrained_policy is not None:
+        policy_cluster_source = pretrained_policy.get("cluster_label_source")
+        policy_cluster_fit_splits = pretrained_policy.get("cluster_fit_splits")
+        if (
+            policy_cluster_source != cluster_metadata["cluster_label_source"]
+            or policy_cluster_fit_splits != cluster_metadata["cluster_fit_splits"]
+        ):
+            pretrained_policy = None
+        elif not np.isclose(
+            float(pretrained_policy.get("validation_risk_free_rate", np.nan)),
+            validation_risk_free_rate,
+            equal_nan=False,
+        ):
+            pretrained_policy = None
 
     if pretrained_policy is None:
         training_result = train_q_learning_agent(
@@ -451,6 +480,7 @@ def evaluate_model_with_q_learning(
             backtest_config=backtest_config,
             agent_config=agent_config,
             cluster_to_idx=cluster_to_idx,
+            validation_risk_free_rate=validation_risk_free_rate,
         )
         best_q_table = training_result["best_q_table"]
         policy_loaded = False
@@ -511,17 +541,26 @@ def evaluate_model_with_q_learning(
         portfolio_returns=train_backtest["portfolio_returns"],
         turnover=train_backtest["turnover"],
         config=backtest_config,
+        risk_free_rate=train_risk_free_rate,
     )
     validation_metrics = calculate_backtest_metrics(
         portfolio_returns=validation_backtest["portfolio_returns"],
         turnover=validation_backtest["turnover"],
         config=backtest_config,
+        risk_free_rate=validation_risk_free_rate,
     )
     test_metrics = calculate_backtest_metrics(
         portfolio_returns=test_backtest["portfolio_returns"],
         turnover=test_backtest["turnover"],
         config=backtest_config,
+        risk_free_rate=test_risk_free_rate,
     )
+    calibration_cluster_ids = sorted(
+        int(cluster_id)
+        for cluster_id in decision_clusters.loc[train_dates.union(validation_dates)].unique()
+    )
+    test_cluster_ids = sorted(int(cluster_id) for cluster_id in decision_clusters.loc[test_dates].unique())
+    test_only_clusters = sorted(set(test_cluster_ids) - set(calibration_cluster_ids))
 
     policy_name = (
         "q_learning_policy("
@@ -536,13 +575,19 @@ def evaluate_model_with_q_learning(
         "source_experiment": experiment_result["experiment_name"],
         "architecture": f"{experiment_result['summary'].get('architecture')}+q_learning",
         "n_clusters": int(np.unique(decision_clusters.values).size),
-        "target_cluster_count": int(experiment_result["summary"].get("target_cluster_count", np.unique(decision_clusters.values).size)),
+        "target_cluster_count": int(cluster_metadata["cluster_model_n_clusters"]),
         "best_mapping": policy_name,
         "objective": backtest_config.objective,
         "best_episode": int(training_result["best_episode"]),
         "n_states": int(training_result["n_states"]),
         "n_actions": int(training_result["n_actions"]),
         "policy_loaded": bool(policy_loaded),
+        "cluster_label_source": cluster_metadata["cluster_label_source"],
+        "cluster_fit_splits": cluster_metadata["cluster_fit_splits"],
+        "cluster_fit_n_windows": cluster_metadata["cluster_fit_n_windows"],
+        "policy_train_split": "train",
+        "policy_selection_split": "validation",
+        "test_only_clusters": ",".join(map(str, test_only_clusters)),
     }
     summary.update({f"train_{key}": value for key, value in train_metrics.items()})
     summary.update({f"validation_{key}": value for key, value in validation_metrics.items()})
@@ -567,6 +612,7 @@ def evaluate_model_with_q_learning(
         "action_names": training_result["action_names"],
         "agent_config": agent_config,
         "source_experiment": experiment_result["experiment_name"],
+        "cluster_metadata": cluster_metadata,
     }
 
 
@@ -604,6 +650,12 @@ def save_q_learning_policy(
         "best_episode": int(evaluation_result["summary"].get("best_episode", 0)),
         "action_names": list(action_names),
         "cluster_to_idx": {str(k): int(v) for k, v in cluster_to_idx.items()},
+        "cluster_label_source": evaluation_result["summary"].get("cluster_label_source"),
+        "cluster_fit_splits": evaluation_result["summary"].get("cluster_fit_splits"),
+        "cluster_fit_n_windows": int(evaluation_result["summary"].get("cluster_fit_n_windows", 0)),
+        "validation_risk_free_rate": float(evaluation_result["summary"].get("validation_risk_free_rate", np.nan)),
+        "policy_train_split": evaluation_result["summary"].get("policy_train_split"),
+        "policy_selection_split": evaluation_result["summary"].get("policy_selection_split"),
         "agent_config": {
             "episodes": int(agent_config.episodes),
             "learning_rate": float(agent_config.learning_rate),
@@ -648,6 +700,10 @@ def load_q_learning_policy(
         "best_episode": int(metadata.get("best_episode", 0)),
         "action_names": list(metadata["action_names"]),
         "cluster_to_idx": {int(k): int(v) for k, v in metadata["cluster_to_idx"].items()},
+        "cluster_label_source": metadata.get("cluster_label_source"),
+        "cluster_fit_splits": metadata.get("cluster_fit_splits"),
+        "cluster_fit_n_windows": int(metadata.get("cluster_fit_n_windows", 0)),
+        "validation_risk_free_rate": float(metadata.get("validation_risk_free_rate", np.nan)),
         "agent_config": metadata.get("agent_config", {}),
         "summary": metadata.get("summary", {}),
         "q_table": q_table_frame.to_numpy(dtype=float),
