@@ -35,10 +35,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validation-ratio", type=float, default=0.20)
     parser.add_argument("--test-ratio", type=float, default=0.10)
     parser.add_argument("--transaction-cost", type=float, default=0.001)
-    parser.add_argument("--initial-capital", type=float, default=100000.0)
+    parser.add_argument("--initial-capital", type=float, default=1.0)
     parser.add_argument("--risk-free-rate", type=float, default=0.02)
+    parser.add_argument("--cash-proxy-source", choices=["FLAT", "RF", "DGS3MO", "FEDFUNDS"], default="FLAT")
     parser.add_argument("--execution-lag", type=int, default=1)
-    parser.add_argument("--assets", nargs="+", default=["SPY", "TLT", "GLD"])
+    parser.add_argument("--assets", nargs="+", default=["SPY", "TLT", "GLD", "Cash"])
     parser.add_argument("--architectures", nargs="*", default=None)
     parser.add_argument("--include-hmm-baseline", action="store_true", default=True)
     parser.add_argument("--skip-hmm-baseline", dest="include_hmm_baseline", action="store_false")
@@ -84,6 +85,7 @@ def main() -> None:
         objective=args.objective,
         allow_action_reuse=False,
         split_random_state=args.random_state,
+        cash_proxy_source=args.cash_proxy_source,
     )
     agent_config = QLearningAgentConfig(
         episodes=args.episodes,
@@ -150,6 +152,8 @@ def main() -> None:
     asset_returns = load_tradable_returns(
         data_config=returns_data_config,
         tradable_assets=backtest_config.tradable_assets,
+        cash_proxy_source=backtest_config.cash_proxy_source,
+        cash_asset_name=backtest_config.cash_asset_name,
     )
 
     print("Running RL backtests for:")
@@ -172,7 +176,8 @@ def main() -> None:
         print("=== random_choice ===")
         print(
             f"validation_{args.objective}={summary[f'validation_{args.objective}']:.4f} | "
-            f"test_{args.objective}={summary[f'test_{args.objective}']:.4f}"
+            f"test_{args.objective}={summary[f'test_{args.objective}']:.4f} | "
+            f"combined_{args.objective}={summary[f'combined_{args.objective}']:.4f}"
         )
         print()
 
@@ -208,6 +213,7 @@ def main() -> None:
             print(
                 f"validation_{args.objective}={summary[f'validation_{args.objective}']:.4f} | "
                 f"test_{args.objective}={summary[f'test_{args.objective}']:.4f} | "
+                f"combined_{args.objective}={summary[f'combined_{args.objective}']:.4f} | "
                 f"best_episode={summary['best_episode']}"
             )
             print()
@@ -251,6 +257,7 @@ def main() -> None:
         print(
             f"validation_{args.objective}={summary[f'validation_{args.objective}']:.4f} | "
             f"test_{args.objective}={summary[f'test_{args.objective}']:.4f} | "
+            f"combined_{args.objective}={summary[f'combined_{args.objective}']:.4f} | "
             f"best_episode={summary['best_episode']}"
         )
         print()
@@ -293,12 +300,25 @@ def main() -> None:
         "test_max_drawdown",
         "best_episode",
     ]
+    combined_columns = [
+        "combined_rank",
+        "experiment_name",
+        "source_experiment",
+        "architecture",
+        f"combined_{args.objective}",
+        "combined_annual_return",
+        "combined_max_drawdown",
+        "best_episode",
+    ]
 
     print("Validation ranking:")
     print(validation_ranking.loc[:, validation_columns].to_string(index=False, float_format=lambda value: f"{value:.4f}"))
     print()
     print("Test ranking:")
     print(test_ranking.loc[:, test_columns].to_string(index=False, float_format=lambda value: f"{value:.4f}"))
+    print()
+    print("Combined validation+test ranking:")
+    print(combined_ranking.loc[:, combined_columns].to_string(index=False, float_format=lambda value: f"{value:.4f}"))
     print()
     print(f"Saved RL ranking artifacts to: {output_dir}")
 

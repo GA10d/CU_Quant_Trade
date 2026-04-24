@@ -34,12 +34,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validation-ratio", type=float, default=0.20)
     parser.add_argument("--test-ratio", type=float, default=0.10)
     parser.add_argument("--transaction-cost", type=float, default=0.001)
-    parser.add_argument("--initial-capital", type=float, default=100000.0)
+    parser.add_argument("--initial-capital", type=float, default=1.0)
     parser.add_argument("--risk-free-rate", type=float, default=0.02)
+    parser.add_argument("--cash-proxy-source", choices=["FLAT", "RF", "DGS3MO", "FEDFUNDS"], default="FLAT")
     parser.add_argument("--execution-lag", type=int, default=1)
+    parser.add_argument("--mapping-fit-split", choices=["train", "validation"], default="train")
     parser.add_argument("--allow-action-reuse", action="store_true", default=False)
     parser.add_argument("--no-action-reuse", dest="allow_action_reuse", action="store_false")
-    parser.add_argument("--assets", nargs="+", default=["SPY", "TLT", "GLD"])
+    parser.add_argument("--assets", nargs="+", default=["SPY", "TLT", "GLD", "Cash"])
     parser.add_argument("--architectures", nargs="*", default=None)
     parser.add_argument("--include-hmm-baseline", action="store_true", default=True)
     parser.add_argument("--skip-hmm-baseline", dest="include_hmm_baseline", action="store_false")
@@ -67,7 +69,9 @@ def main() -> None:
         validation_ratio=args.validation_ratio,
         test_ratio=args.test_ratio,
         objective=args.objective,
+        mapping_fit_split=args.mapping_fit_split,
         allow_action_reuse=args.allow_action_reuse,
+        cash_proxy_source=args.cash_proxy_source,
     )
 
     action_library = build_default_action_library(
@@ -114,6 +118,8 @@ def main() -> None:
     asset_returns = load_tradable_returns(
         data_config=returns_data_config,
         tradable_assets=backtest_config.tradable_assets,
+        cash_proxy_source=backtest_config.cash_proxy_source,
+        cash_asset_name=backtest_config.cash_asset_name,
     )
 
     print("Running models:")
@@ -139,7 +145,8 @@ def main() -> None:
         print(
             f"best_mapping={summary['best_mapping']} | "
             f"validation_{args.objective}={summary[f'validation_{args.objective}']:.4f} | "
-            f"test_{args.objective}={summary[f'test_{args.objective}']:.4f}"
+            f"test_{args.objective}={summary[f'test_{args.objective}']:.4f} | "
+            f"combined_{args.objective}={summary[f'combined_{args.objective}']:.4f}"
         )
         print()
 
@@ -162,7 +169,8 @@ def main() -> None:
             print(
                 f"best_mapping={summary['best_mapping']} | "
                 f"validation_{args.objective}={summary[f'validation_{args.objective}']:.4f} | "
-                f"test_{args.objective}={summary[f'test_{args.objective}']:.4f}"
+                f"test_{args.objective}={summary[f'test_{args.objective}']:.4f} | "
+                f"combined_{args.objective}={summary[f'combined_{args.objective}']:.4f}"
             )
             print()
         elif not HMMLEARN_AVAILABLE:
@@ -195,7 +203,8 @@ def main() -> None:
         print(
             f"best_mapping={summary['best_mapping']} | "
             f"validation_{args.objective}={summary[f'validation_{args.objective}']:.4f} | "
-            f"test_{args.objective}={summary[f'test_{args.objective}']:.4f}"
+            f"test_{args.objective}={summary[f'test_{args.objective}']:.4f} | "
+            f"combined_{args.objective}={summary[f'combined_{args.objective}']:.4f}"
         )
         print()
 
@@ -232,6 +241,15 @@ def main() -> None:
         "test_max_drawdown",
         "best_mapping",
     ]
+    combined_columns = [
+        "combined_rank",
+        "experiment_name",
+        "architecture",
+        f"combined_{args.objective}",
+        "combined_annual_return",
+        "combined_max_drawdown",
+        "best_mapping",
+    ]
 
     if not split_summary.empty:
         print("Dataset split:")
@@ -243,6 +261,9 @@ def main() -> None:
     print()
     print("Test ranking:")
     print(test_ranking.loc[:, test_columns].to_string(index=False, float_format=lambda value: f"{value:.4f}"))
+    print()
+    print("Combined validation+test ranking:")
+    print(combined_ranking.loc[:, combined_columns].to_string(index=False, float_format=lambda value: f"{value:.4f}"))
     print()
     print(f"Saved ranking artifacts to: {output_dir}")
 

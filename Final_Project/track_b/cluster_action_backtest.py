@@ -24,8 +24,8 @@ from experiment_utils import prepare_sequence_experiment_inputs
 
 @dataclass
 class ActionBacktestConfig:
-    tradable_assets: tuple[str, ...] = ("SPY", "TLT", "GLD")
-    initial_capital: float = 100000.0
+    tradable_assets: tuple[str, ...] = ("SPY", "TLT", "GLD", "Cash")
+    initial_capital: float = 1.0
     transaction_cost: float = 0.001
     risk_free_rate: float = 0.02
     annualization_factor: int = 252
@@ -33,9 +33,13 @@ class ActionBacktestConfig:
     validation_ratio: float = 0.20
     test_ratio: float = 0.10
     objective: str = "sharpe"
+    mapping_fit_split: str = "train"
     allow_action_reuse: bool = False
     fallback_action_name: str | None = None
     split_random_state: int = 42
+    cash_proxy_source: str = "FLAT"
+    cash_asset_name: str = "Cash"
+    exit_on_bankruptcy: bool = False
 
     @property
     def train_ratio(self) -> float:
@@ -50,26 +54,39 @@ class ActionBacktestConfig:
 
 def build_default_action_library(
     n_actions: int,
-    tradable_assets: tuple[str, ...] = ("SPY", "TLT", "GLD"),
+    tradable_assets: tuple[str, ...] = ("SPY", "TLT", "GLD", "Cash"),
 ) -> dict[str, pd.Series]:
     if n_actions == 3:
         base_templates = {
-            "defensive": {"SPY": 0.20, "TLT": 0.55, "GLD": 0.25},
-            "balanced": {"SPY": 0.40, "TLT": 0.35, "GLD": 0.25},
-            "aggressive": {"SPY": 0.70, "TLT": 0.20, "GLD": 0.10},
+            "cash": {"Cash": 1.0},
+            "defensive": {"SPY": 0.15, "TLT": 0.35, "GLD": 0.20, "Cash": 0.30},
+            "aggressive": {"SPY": 0.60, "TLT": 0.15, "GLD": 0.10, "Cash": 0.15},
         }
     elif n_actions == 4:
         base_templates = {
-            "defensive": {"SPY": 0.20, "TLT": 0.50, "GLD": 0.30},
-            "cautious": {"SPY": 0.30, "TLT": 0.40, "GLD": 0.30},
-            "rebound": {"SPY": 0.50, "TLT": 0.30, "GLD": 0.20},
-            "aggressive": {"SPY": 0.70, "TLT": 0.20, "GLD": 0.10},
+            "cash": {"Cash": 1.0},
+            "defensive": {"SPY": 0.10, "TLT": 0.35, "GLD": 0.20, "Cash": 0.35},
+            "rebound": {"SPY": 0.45, "TLT": 0.20, "GLD": 0.15, "Cash": 0.20},
+            "aggressive": {"SPY": 0.65, "TLT": 0.10, "GLD": 0.10, "Cash": 0.15},
         }
     else:
         raise ValueError("Default action library only supports 3-action or 4-action configurations.")
 
+    return build_action_library_from_templates(
+        action_templates=base_templates,
+        tradable_assets=tradable_assets,
+    )
+
+
+def build_action_library_from_templates(
+    action_templates: dict[str, dict[str, float] | pd.Series],
+    tradable_assets: tuple[str, ...] = ("SPY", "TLT", "GLD", "Cash"),
+) -> dict[str, pd.Series]:
+    if not action_templates:
+        raise ValueError("action_templates is empty.")
+
     action_library: dict[str, pd.Series] = {}
-    for action_name, weights in base_templates.items():
+    for action_name, weights in action_templates.items():
         action_weights = pd.Series(weights, dtype=float).reindex(tradable_assets).fillna(0.0)
         total_weight = float(action_weights.sum())
         if total_weight <= 0:
@@ -81,16 +98,78 @@ def build_default_action_library(
 def load_tradable_returns(
     data_config: SequenceDataConfig,
     tradable_assets: tuple[str, ...],
+    cash_proxy_source: str = "FLAT",
+    cash_asset_name: str = "Cash",
 ) -> pd.DataFrame:
-    market_data, _ = load_market_and_macro(data_config)
-    missing_assets = [asset for asset in tradable_assets if asset not in market_data.columns]
+    market_data, macro_data = load_market_and_macro(data_config)
+    real_assets = [asset for asset in tradable_assets if asset != cash_asset_name]
+    missing_assets = [asset for asset in real_assets if asset not in market_data.columns]
     if missing_assets:
         raise ValueError(f"Missing tradable assets in market data: {', '.join(missing_assets)}")
 
-    returns = market_data.loc[:, list(tradable_assets)].pct_change(fill_method=None)
+    returns = pd.DataFrame(index=market_data.index)
+    if real_assets:
+        returns = market_data.loc[:, list(real_assets)].pct_change(fill_method=None)
+    if cash_asset_name in tradable_assets:
+        returns[cash_asset_name] = load_cash_proxy_returns(
+            data_config=data_config,
+            target_index=returns.index if not returns.empty else market_data.index,
+            macro_data=macro_data,
+            cash_proxy_source=cash_proxy_source,
+            cash_asset_name=cash_asset_name,
+        )
+    returns = returns.loc[:, list(tradable_assets)]
     returns = returns.dropna(how="all")
     returns.index.name = "Date"
     return returns
+
+
+def load_cash_proxy_returns(
+    data_config: SequenceDataConfig,
+    target_index: pd.Index,
+    macro_data: pd.DataFrame | None = None,
+    cash_proxy_source: str = "FLAT",
+    cash_asset_name: str = "Cash",
+) -> pd.Series:
+    source = str(cash_proxy_source).upper().strip()
+    target_index = pd.Index(pd.to_datetime(target_index), name="Date").sort_values()
+    if len(target_index) == 0:
+        return pd.Series(dtype=float, name=cash_asset_name)
+
+    if source in {"FLAT", "ZERO", "NONE", "CASH"}:
+        return pd.Series(0.0, index=target_index, name=cash_asset_name, dtype=float)
+
+    if source == "RF":
+        factor_path = Path(data_config.data_dir) / "factor_data.csv"
+        if not factor_path.exists():
+            raise FileNotFoundError(f"Cash proxy source RF requires factor_data.csv at {factor_path}.")
+        factor_data = pd.read_csv(factor_path, index_col="Date", parse_dates=True).sort_index()
+        if "RF" not in factor_data.columns:
+            raise KeyError("factor_data.csv does not contain an `RF` column for cash proxy returns.")
+        rf_series = pd.to_numeric(factor_data["RF"], errors="coerce") / 100.0
+        aligned = (
+            rf_series.reindex(rf_series.index.union(target_index).sort_values())
+            .ffill()
+            .reindex(target_index)
+            .fillna(0.0)
+        )
+        return aligned.rename(cash_asset_name)
+
+    if macro_data is None:
+        _, macro_data = load_market_and_macro(data_config)
+    if source not in macro_data.columns:
+        raise KeyError(f"Cash proxy source {cash_proxy_source!r} not found in macro data columns.")
+
+    annual_rate = pd.to_numeric(macro_data[source], errors="coerce") / 100.0
+    annual_rate = annual_rate.sort_index()
+    aligned_rate = (
+        annual_rate.reindex(annual_rate.index.union(target_index).sort_values())
+        .ffill()
+        .reindex(target_index)
+        .fillna(0.0)
+    )
+    daily_rate = (1.0 + aligned_rate).pow(1.0 / 252.0) - 1.0
+    return daily_rate.rename(cash_asset_name)
 
 
 def estimate_annual_risk_free_rate(
@@ -312,6 +391,29 @@ def _split_date_union(splits: dict[str, pd.Index], split_names: Iterable[str]) -
     return pd.Index(dates.sort_values(), name="Date")
 
 
+def continuous_span_dates(
+    dates: pd.Index,
+    available_index: pd.Index | None = None,
+) -> pd.Index:
+    dates = pd.Index(pd.to_datetime(dates), name="Date").sort_values()
+    if len(dates) == 0:
+        return pd.Index([], name="Date")
+    if available_index is None:
+        return dates
+
+    available = pd.Index(pd.to_datetime(available_index), name="Date").sort_values()
+    mask = (available >= dates.min()) & (available <= dates.max())
+    return pd.Index(available[mask], name="Date")
+
+
+def combined_validation_test_dates(
+    splits: dict[str, pd.Index],
+    available_index: pd.Index | None = None,
+) -> pd.Index:
+    holdout_dates = _split_date_union(splits, ("validation", "test"))
+    return continuous_span_dates(holdout_dates, available_index=available_index)
+
+
 def _infer_target_cluster_count(experiment_result: dict, fallback_cluster_series: pd.Series) -> int:
     summary = experiment_result.get("summary", {})
     for key in ("target_cluster_count", "n_clusters"):
@@ -410,7 +512,7 @@ def _fallback_action_name(
             raise ValueError(f"fallback_action_name={explicit_name!r} is not in the action library.")
         return explicit_name
 
-    for preferred in ("balanced", "cautious", "rebound", "defensive", "aggressive"):
+    for preferred in ("cash", "balanced", "cautious", "rebound", "defensive", "aggressive"):
         if preferred in action_library:
             return preferred
     return next(iter(action_library))
@@ -472,6 +574,143 @@ def build_weight_frame_from_mapping(
     return weights, action_series.rename("action")
 
 
+def build_static_weight_frame(
+    dates: pd.Index,
+    weights: dict[str, float] | pd.Series,
+    tradable_assets: tuple[str, ...],
+) -> pd.DataFrame:
+    dates = pd.Index(pd.to_datetime(dates), name="Date").sort_values()
+    if len(dates) == 0:
+        raise ValueError("dates is empty.")
+
+    weight_series = pd.Series(weights, dtype=float).reindex(tradable_assets).fillna(0.0)
+    total_weight = float(weight_series.sum())
+    if total_weight <= 0:
+        raise ValueError("Static strategy weights must have a positive total weight.")
+    normalized = weight_series / total_weight
+    frame = pd.DataFrame(
+        np.tile(normalized.to_numpy(dtype=float), (len(dates), 1)),
+        index=dates,
+        columns=list(tradable_assets),
+    )
+    frame.index.name = "Date"
+    return frame
+
+
+def _simulate_portfolio_path(
+    executed_weights: pd.DataFrame,
+    aligned_returns: pd.DataFrame,
+    config: ActionBacktestConfig,
+) -> tuple[pd.DataFrame, pd.Series, pd.Series, pd.Series, pd.Series, pd.Series, dict]:
+    assets = list(executed_weights.columns)
+    effective_weights = pd.DataFrame(index=executed_weights.index, columns=assets, dtype=float)
+    gross_returns = pd.Series(index=executed_weights.index, dtype=float, name="gross_return")
+    transaction_costs = pd.Series(index=executed_weights.index, dtype=float, name="transaction_cost")
+    portfolio_returns = pd.Series(index=executed_weights.index, dtype=float, name="portfolio_return")
+    portfolio_nav = pd.Series(index=executed_weights.index, dtype=float, name="portfolio_nav")
+    turnover = pd.Series(index=executed_weights.index, dtype=float, name="turnover")
+
+    nav = float(config.initial_capital)
+    previous_weights = np.zeros(len(assets), dtype=float)
+    active = True
+    bankruptcy_date = pd.NaT
+
+    for date in executed_weights.index:
+        desired_weights = executed_weights.loc[date, assets].to_numpy(dtype=float)
+        current_returns = aligned_returns.loc[date, assets].to_numpy(dtype=float)
+
+        if not active:
+            effective = np.zeros(len(assets), dtype=float)
+            gross = 0.0
+            transaction_cost = 0.0
+            realized_return = 0.0
+        else:
+            effective = desired_weights.copy()
+            turn = float(np.abs(effective - previous_weights).sum())
+            gross = float(np.dot(effective, current_returns))
+            transaction_cost = float(turn * config.transaction_cost)
+            realized_return = gross - transaction_cost
+            if config.exit_on_bankruptcy:
+                realized_return = max(realized_return, -1.0)
+            nav = float(nav * (1.0 + realized_return))
+            if config.exit_on_bankruptcy and nav <= 0.0:
+                nav = 0.0
+                active = False
+                if pd.isna(bankruptcy_date):
+                    bankruptcy_date = pd.Timestamp(date)
+
+            previous_weights = np.zeros(len(assets), dtype=float) if not active else effective.copy()
+            turnover.loc[date] = turn
+
+        if not active and pd.isna(turnover.loc[date]):
+            turnover.loc[date] = 0.0
+        effective_weights.loc[date, assets] = effective
+        gross_returns.loc[date] = gross
+        transaction_costs.loc[date] = transaction_cost
+        portfolio_returns.loc[date] = realized_return
+        portfolio_nav.loc[date] = nav
+
+    metadata = {
+        "bankruptcy_triggered": bool(pd.notna(bankruptcy_date)),
+        "bankruptcy_date": bankruptcy_date,
+    }
+    return (
+        effective_weights,
+        gross_returns,
+        transaction_costs,
+        portfolio_returns,
+        portfolio_nav,
+        turnover,
+        metadata,
+    )
+
+
+def run_target_weight_backtest(
+    target_weights: pd.DataFrame,
+    asset_returns: pd.DataFrame,
+    config: ActionBacktestConfig,
+    cluster_series: pd.Series | None = None,
+    action_series: pd.Series | None = None,
+) -> dict:
+    common_dates = pd.Index(target_weights.index).intersection(asset_returns.index)
+    if common_dates.empty:
+        raise ValueError("No overlapping dates between target_weights and asset_returns.")
+
+    aligned_returns = asset_returns.loc[common_dates, list(config.tradable_assets)].copy().dropna(how="any")
+    aligned_target = target_weights.loc[aligned_returns.index, list(config.tradable_assets)].copy().fillna(0.0)
+    row_sums = aligned_target.sum(axis=1)
+    valid_rows = row_sums > 0
+    aligned_target.loc[valid_rows] = aligned_target.loc[valid_rows].div(row_sums[valid_rows], axis=0)
+
+    planned_executed = aligned_target.shift(config.execution_lag).fillna(0.0)
+    (
+        executed_weights,
+        gross_returns,
+        transaction_costs,
+        portfolio_returns,
+        portfolio_nav,
+        turnover,
+        metadata,
+    ) = _simulate_portfolio_path(planned_executed, aligned_returns, config)
+
+    result = {
+        "target_weights": aligned_target,
+        "executed_weights": executed_weights,
+        "asset_returns": aligned_returns,
+        "gross_returns": gross_returns,
+        "transaction_costs": transaction_costs,
+        "portfolio_returns": portfolio_returns,
+        "portfolio_nav": portfolio_nav,
+        "turnover": turnover,
+        **metadata,
+    }
+    if cluster_series is not None:
+        result["cluster_series"] = cluster_series.loc[aligned_returns.index].copy()
+    if action_series is not None:
+        result["action_series"] = action_series.loc[aligned_returns.index].copy()
+    return result
+
+
 def run_action_mapping_backtest(
     cluster_series: pd.Series,
     asset_returns: pd.DataFrame,
@@ -484,38 +723,82 @@ def run_action_mapping_backtest(
         raise ValueError("No overlapping dates between cluster_series and asset_returns.")
 
     aligned_clusters = cluster_series.loc[common_dates].copy()
-    aligned_returns = asset_returns.loc[common_dates, list(config.tradable_assets)].copy()
-    aligned_returns = aligned_returns.dropna(how="any")
-    aligned_clusters = aligned_clusters.loc[aligned_returns.index]
-
     target_weights, action_series = build_weight_frame_from_mapping(
         cluster_series=aligned_clusters,
         action_library=action_library,
         mapping=mapping,
         fallback_action_name=config.fallback_action_name,
     )
+    expanded_dates = continuous_span_dates(common_dates, available_index=asset_returns.index)
+    target_weights = target_weights.reindex(expanded_dates).ffill().fillna(0.0)
+    action_series = action_series.reindex(expanded_dates).ffill().rename("action")
+    expanded_clusters = aligned_clusters.reindex(expanded_dates).ffill()
+    if expanded_clusters.isna().any():
+        raise ValueError("Expanded cluster series still contains NaN values after forward fill.")
+    expanded_clusters = expanded_clusters.astype(int).rename("cluster")
+    return run_target_weight_backtest(
+        target_weights=target_weights,
+        asset_returns=asset_returns,
+        config=config,
+        cluster_series=expanded_clusters,
+        action_series=action_series,
+    )
 
-    executed_weights = target_weights.shift(config.execution_lag).fillna(0.0)
-    turnover = executed_weights.diff().abs().sum(axis=1)
-    if not turnover.empty:
-        turnover.iloc[0] = executed_weights.iloc[0].abs().sum()
 
-    gross_returns = (executed_weights * aligned_returns).sum(axis=1)
-    transaction_costs = turnover * config.transaction_cost
-    portfolio_returns = gross_returns - transaction_costs
-    portfolio_nav = (1.0 + portfolio_returns).cumprod() * config.initial_capital
+def run_static_weight_backtest(
+    strategy_name: str,
+    weights: dict[str, float] | pd.Series,
+    asset_returns: pd.DataFrame,
+    config: ActionBacktestConfig,
+) -> dict:
+    target_weights = build_static_weight_frame(
+        dates=asset_returns.index,
+        weights=weights,
+        tradable_assets=config.tradable_assets,
+    )
+    action_series = pd.Series(strategy_name, index=target_weights.index, name="action", dtype="object")
+    cluster_series = pd.Series(0, index=target_weights.index, name="cluster", dtype=int)
+    return run_target_weight_backtest(
+        target_weights=target_weights,
+        asset_returns=asset_returns,
+        config=config,
+        cluster_series=cluster_series,
+        action_series=action_series,
+    )
 
+
+def evaluate_static_weight_strategy(
+    strategy_name: str,
+    weights: dict[str, float] | pd.Series,
+    asset_returns: pd.DataFrame,
+    config: ActionBacktestConfig,
+    annual_risk_free_rate: float | None = None,
+) -> dict:
+    backtest_result = run_static_weight_backtest(
+        strategy_name=strategy_name,
+        weights=weights,
+        asset_returns=asset_returns,
+        config=config,
+    )
+    metrics = calculate_backtest_metrics(
+        portfolio_returns=backtest_result["portfolio_returns"],
+        turnover=backtest_result["turnover"],
+        config=config,
+        risk_free_rate=annual_risk_free_rate,
+    )
+    summary = {
+        "strategy_name": strategy_name,
+        "initial_capital": float(config.initial_capital),
+        "exit_on_bankruptcy": bool(config.exit_on_bankruptcy),
+        "bankruptcy_triggered": bool(backtest_result.get("bankruptcy_triggered", False)),
+        "bankruptcy_date": backtest_result.get("bankruptcy_date"),
+    }
+    summary.update(metrics)
     return {
-        "cluster_series": aligned_clusters,
-        "action_series": action_series,
-        "target_weights": target_weights,
-        "executed_weights": executed_weights,
-        "asset_returns": aligned_returns,
-        "gross_returns": gross_returns.rename("gross_return"),
-        "transaction_costs": transaction_costs.rename("transaction_cost"),
-        "portfolio_returns": portfolio_returns.rename("portfolio_return"),
-        "portfolio_nav": portfolio_nav.rename("portfolio_nav"),
-        "turnover": turnover.rename("turnover"),
+        "summary": summary,
+        "backtest_result": backtest_result,
+        "metrics": metrics,
+        "weights": pd.Series(weights, dtype=float).reindex(config.tradable_assets).fillna(0.0),
     }
 
 
@@ -598,15 +881,16 @@ def search_best_cluster_action_mapping(
     cluster_series: pd.Series,
     asset_returns: pd.DataFrame,
     action_library: dict[str, pd.Series],
-    validation_dates: pd.Index,
+    fit_dates: pd.Index,
     config: ActionBacktestConfig,
-    validation_risk_free_rate: float | None = None,
+    fit_split_name: str,
+    fit_risk_free_rate: float | None = None,
 ) -> dict:
-    validation_clusters = cluster_series.loc[cluster_series.index.intersection(validation_dates)].dropna()
-    if validation_clusters.empty:
-        raise ValueError("Validation cluster series is empty after alignment.")
+    fit_clusters = cluster_series.loc[cluster_series.index.intersection(fit_dates)].dropna()
+    if fit_clusters.empty:
+        raise ValueError(f"{fit_split_name} cluster series is empty after alignment.")
 
-    candidate_cluster_ids = _sorted_unique_ints(validation_clusters)
+    candidate_cluster_ids = _sorted_unique_ints(fit_clusters)
     candidate_mappings = enumerate_cluster_action_mappings(
         cluster_ids=candidate_cluster_ids,
         action_names=action_library.keys(),
@@ -629,30 +913,30 @@ def search_best_cluster_action_mapping(
             mapping=mapping,
             config=config,
         )
-        validation_returns = backtest_result["portfolio_returns"].loc[
-            backtest_result["portfolio_returns"].index.intersection(validation_dates)
+        fit_returns = backtest_result["portfolio_returns"].loc[
+            backtest_result["portfolio_returns"].index.intersection(fit_dates)
         ]
-        validation_turnover = backtest_result["turnover"].loc[validation_returns.index]
-        validation_metrics = calculate_backtest_metrics(
-            validation_returns,
-            validation_turnover,
+        fit_turnover = backtest_result["turnover"].loc[fit_returns.index]
+        fit_metrics = calculate_backtest_metrics(
+            fit_returns,
+            fit_turnover,
             config,
-            risk_free_rate=validation_risk_free_rate,
+            risk_free_rate=fit_risk_free_rate,
         )
-        objective_value = _objective_value(validation_metrics, config.objective)
+        objective_value = _objective_value(fit_metrics, config.objective)
 
         row = {
             "mapping": serialize_mapping(mapping),
             "objective_value": objective_value,
         }
-        row.update({f"validation_{key}": value for key, value in validation_metrics.items()})
+        row.update({f"{fit_split_name}_{key}": value for key, value in fit_metrics.items()})
         search_rows.append(row)
 
         if objective_value > best_score:
             best_score = objective_value
             best_mapping = mapping
             best_backtest = backtest_result
-            best_metrics = validation_metrics
+            best_metrics = fit_metrics
 
     assert best_mapping is not None
     assert best_backtest is not None
@@ -664,7 +948,8 @@ def search_best_cluster_action_mapping(
         "best_mapping_text": serialize_mapping(best_mapping),
         "best_score": best_score,
         "candidate_cluster_ids": candidate_cluster_ids,
-        "validation_metrics": best_metrics,
+        "fit_split_name": fit_split_name,
+        "fit_metrics": best_metrics,
         "search_results": search_df,
         "backtest_result": best_backtest,
     }
@@ -698,47 +983,65 @@ def evaluate_model_cluster_actions(
         config=config,
     )
     macro_data = experiment_result.get("macro_data")
-    validation_risk_free_rate = estimate_annual_risk_free_rate(macro_data, splits["validation"], config)
-    test_risk_free_rate = estimate_annual_risk_free_rate(macro_data, splits["test"], config)
+    train_risk_free_rate = estimate_annual_risk_free_rate(macro_data, splits["train"], config)
+    validation_dates = combined_validation_test_dates(splits, available_index=asset_returns.index)
+    validation_risk_free_rate = estimate_annual_risk_free_rate(macro_data, validation_dates, config)
+    test_risk_free_rate = validation_risk_free_rate
+    combined_dates = validation_dates
+    combined_risk_free_rate = validation_risk_free_rate
+    mapping_fit_split = config.mapping_fit_split.lower().strip()
+    allowed_mapping_fit_splits = {"train", "validation"}
+    if mapping_fit_split not in allowed_mapping_fit_splits:
+        raise ValueError(
+            f"mapping_fit_split={config.mapping_fit_split!r} is not one of: "
+            f"{', '.join(sorted(allowed_mapping_fit_splits))}."
+        )
+    split_risk_free_rates = {
+        "train": train_risk_free_rate,
+        "validation": validation_risk_free_rate,
+        "test": test_risk_free_rate,
+    }
 
     search_result = search_best_cluster_action_mapping(
         cluster_series=cluster_series,
         asset_returns=asset_returns,
         action_library=action_library,
-        validation_dates=splits["validation"],
+        fit_dates=splits[mapping_fit_split],
         config=config,
-        validation_risk_free_rate=validation_risk_free_rate,
+        fit_split_name=mapping_fit_split,
+        fit_risk_free_rate=split_risk_free_rates[mapping_fit_split],
     )
     best_backtest = search_result["backtest_result"]
 
-    validation_returns = best_backtest["portfolio_returns"].loc[
-        best_backtest["portfolio_returns"].index.intersection(splits["validation"])
-    ]
-    validation_turnover = best_backtest["turnover"].loc[validation_returns.index]
-    validation_metrics = calculate_backtest_metrics(
-        validation_returns,
-        validation_turnover,
-        config,
-        risk_free_rate=validation_risk_free_rate,
+    combined_backtest = run_action_mapping_backtest(
+        cluster_series=cluster_series.loc[cluster_series.index.intersection(combined_dates)],
+        asset_returns=asset_returns,
+        action_library=action_library,
+        mapping=search_result["best_mapping"],
+        config=config,
     )
-
-    test_returns = best_backtest["portfolio_returns"].loc[
-        best_backtest["portfolio_returns"].index.intersection(splits["test"])
-    ]
-    test_turnover = best_backtest["turnover"].loc[test_returns.index]
-    test_metrics = calculate_backtest_metrics(
-        test_returns,
-        test_turnover,
+    combined_returns = combined_backtest["portfolio_returns"]
+    combined_turnover = combined_backtest["turnover"]
+    combined_metrics = calculate_backtest_metrics(
+        combined_returns,
+        combined_turnover,
         config,
-        risk_free_rate=test_risk_free_rate,
+        risk_free_rate=combined_risk_free_rate,
     )
+    validation_metrics = dict(combined_metrics)
+    test_metrics = dict(combined_metrics)
+    holdout_cluster_dates = combined_validation_test_dates(splits)
     validation_cluster_ids = _sorted_unique_ints(
-        cluster_series.loc[cluster_series.index.intersection(splits["validation"])]
+        cluster_series.loc[cluster_series.index.intersection(holdout_cluster_dates)]
     )
     test_cluster_ids = _sorted_unique_ints(
         cluster_series.loc[cluster_series.index.intersection(splits["test"])]
     )
+    mapping_fit_cluster_ids = _sorted_unique_ints(
+        cluster_series.loc[cluster_series.index.intersection(splits[mapping_fit_split])]
+    )
     mapped_cluster_ids = _sorted_unique_ints(search_result["best_mapping"].keys())
+    unmapped_validation_clusters = sorted(set(validation_cluster_ids) - set(mapped_cluster_ids))
     unmapped_test_clusters = sorted(set(test_cluster_ids) - set(mapped_cluster_ids))
 
     summary = {
@@ -751,12 +1054,15 @@ def evaluate_model_cluster_actions(
         "cluster_label_source": cluster_metadata["cluster_label_source"],
         "cluster_fit_splits": cluster_metadata["cluster_fit_splits"],
         "cluster_fit_n_windows": cluster_metadata["cluster_fit_n_windows"],
-        "mapping_fit_split": "validation",
-        "mapping_candidate_clusters": ",".join(map(str, validation_cluster_ids)),
+        "mapping_fit_split": mapping_fit_split,
+        "mapping_candidate_clusters": ",".join(map(str, mapping_fit_cluster_ids)),
+        "validation_clusters": ",".join(map(str, validation_cluster_ids)),
+        "unmapped_validation_clusters": ",".join(map(str, unmapped_validation_clusters)),
         "unmapped_test_clusters": ",".join(map(str, unmapped_test_clusters)),
     }
     summary.update({f"validation_{key}": value for key, value in validation_metrics.items()})
     summary.update({f"test_{key}": value for key, value in test_metrics.items()})
+    summary.update({f"combined_{key}": value for key, value in combined_metrics.items()})
 
     return {
         "summary": summary,
@@ -766,8 +1072,10 @@ def evaluate_model_cluster_actions(
         "best_mapping_text": search_result["best_mapping_text"],
         "search_results": search_result["search_results"],
         "backtest_result": best_backtest,
+        "combined_backtest_result": combined_backtest,
         "validation_metrics": validation_metrics,
         "test_metrics": test_metrics,
+        "combined_metrics": combined_metrics,
         "cluster_metadata": cluster_metadata,
     }
 
@@ -793,8 +1101,11 @@ def evaluate_random_choice_baseline(
     splits = prepared_inputs["splits"]
     split_summary = prepared_inputs["split_summary"]
     macro_data = prepared_inputs.get("macro_data")
-    validation_risk_free_rate = estimate_annual_risk_free_rate(macro_data, splits["validation"], config)
-    test_risk_free_rate = estimate_annual_risk_free_rate(macro_data, splits["test"], config)
+    validation_dates = combined_validation_test_dates(splits, available_index=asset_returns.index)
+    validation_risk_free_rate = estimate_annual_risk_free_rate(macro_data, validation_dates, config)
+    test_risk_free_rate = validation_risk_free_rate
+    combined_dates = validation_dates
+    combined_risk_free_rate = validation_risk_free_rate
 
     action_names = list(action_library.keys())
     if not action_names:
@@ -818,27 +1129,23 @@ def evaluate_random_choice_baseline(
         config=config,
     )
 
-    validation_returns = backtest_result["portfolio_returns"].loc[
-        backtest_result["portfolio_returns"].index.intersection(splits["validation"])
-    ]
-    validation_turnover = backtest_result["turnover"].loc[validation_returns.index]
-    validation_metrics = calculate_backtest_metrics(
-        validation_returns,
-        validation_turnover,
-        config,
-        risk_free_rate=validation_risk_free_rate,
+    combined_backtest = run_action_mapping_backtest(
+        cluster_series=cluster_series.loc[cluster_series.index.intersection(combined_dates)],
+        asset_returns=asset_returns,
+        action_library=action_library,
+        mapping=mapping,
+        config=config,
     )
-
-    test_returns = backtest_result["portfolio_returns"].loc[
-        backtest_result["portfolio_returns"].index.intersection(splits["test"])
-    ]
-    test_turnover = backtest_result["turnover"].loc[test_returns.index]
-    test_metrics = calculate_backtest_metrics(
-        test_returns,
-        test_turnover,
+    combined_returns = combined_backtest["portfolio_returns"]
+    combined_turnover = combined_backtest["turnover"]
+    combined_metrics = calculate_backtest_metrics(
+        combined_returns,
+        combined_turnover,
         config,
-        risk_free_rate=test_risk_free_rate,
+        risk_free_rate=combined_risk_free_rate,
     )
+    validation_metrics = dict(combined_metrics)
+    test_metrics = dict(combined_metrics)
 
     best_mapping_text = f"random_daily_choice(seed={random_state})"
     search_results = pd.DataFrame(
@@ -860,6 +1167,7 @@ def evaluate_random_choice_baseline(
     }
     summary.update({f"validation_{key}": value for key, value in validation_metrics.items()})
     summary.update({f"test_{key}": value for key, value in test_metrics.items()})
+    summary.update({f"combined_{key}": value for key, value in combined_metrics.items()})
 
     return {
         "summary": summary,
@@ -869,8 +1177,10 @@ def evaluate_random_choice_baseline(
         "best_mapping_text": best_mapping_text,
         "search_results": search_results,
         "backtest_result": backtest_result,
+        "combined_backtest_result": combined_backtest,
         "validation_metrics": validation_metrics,
         "test_metrics": test_metrics,
+        "combined_metrics": combined_metrics,
     }
 
 
@@ -885,6 +1195,7 @@ def build_model_ranking_tables(
     _, descending = _metric_sort_key(objective)
     validation_column = f"validation_{objective}"
     test_column = f"test_{objective}"
+    combined_column = f"combined_{objective}"
 
     validation_ranking = summary_df.sort_values(validation_column, ascending=not descending).reset_index(drop=True)
     validation_ranking.insert(0, "validation_rank", np.arange(1, len(validation_ranking) + 1))
@@ -892,12 +1203,9 @@ def build_model_ranking_tables(
     test_ranking = summary_df.sort_values(test_column, ascending=not descending).reset_index(drop=True)
     test_ranking.insert(0, "test_rank", np.arange(1, len(test_ranking) + 1))
 
-    combined = validation_ranking.merge(
-        test_ranking[["experiment_name", "test_rank"]],
-        on="experiment_name",
-        how="left",
-    )
-    return validation_ranking, test_ranking, combined
+    combined_ranking = summary_df.sort_values(combined_column, ascending=not descending).reset_index(drop=True)
+    combined_ranking.insert(0, "combined_rank", np.arange(1, len(combined_ranking) + 1))
+    return validation_ranking, test_ranking, combined_ranking
 
 
 def save_evaluation_artifacts(
@@ -931,7 +1239,8 @@ def save_evaluation_artifacts(
     for result in evaluation_results:
         experiment_name = result["summary"]["experiment_name"]
         safe_name = experiment_name.replace("/", "_")
-        result["search_results"].to_csv(search_dir / f"{safe_name}_validation_search.csv", index=False)
+        mapping_fit_split = result["summary"].get("mapping_fit_split", "validation")
+        result["search_results"].to_csv(search_dir / f"{safe_name}_{mapping_fit_split}_search.csv", index=False)
 
         backtest_frame = pd.concat(
             [
@@ -1250,8 +1559,12 @@ def save_backtest_visualizations(
 __all__ = [
     "ActionBacktestConfig",
     "build_default_action_library",
+    "build_action_library_from_templates",
     "load_tradable_returns",
+    "load_cash_proxy_returns",
     "estimate_annual_risk_free_rate",
+    "combined_validation_test_dates",
+    "continuous_span_dates",
     "build_hmm_baseline_experiment_result",
     "split_window_dates",
     "summarize_split_dates",
@@ -1259,7 +1572,11 @@ __all__ = [
     "enumerate_cluster_action_mappings",
     "serialize_mapping",
     "build_weight_frame_from_mapping",
+    "build_static_weight_frame",
+    "run_target_weight_backtest",
     "run_action_mapping_backtest",
+    "run_static_weight_backtest",
+    "evaluate_static_weight_strategy",
     "calculate_backtest_metrics",
     "search_best_cluster_action_mapping",
     "evaluate_model_cluster_actions",
