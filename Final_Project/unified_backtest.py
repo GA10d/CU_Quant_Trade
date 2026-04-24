@@ -400,6 +400,10 @@ def save_all_outputs(
     validation_nav = build_nav_frame(evaluation_results, split_name="validation")
     test_nav = build_nav_frame(evaluation_results, split_name="test")
 
+    full_nav.to_csv(plots_dir / "full_period_nav.csv")
+    validation_nav.to_csv(plots_dir / "validation_nav.csv")
+    test_nav.to_csv(plots_dir / "test_nav.csv")
+
     save_nav_plot(full_nav, plots_dir / "full_period_nav.png", "Unified Full-Period NAV Comparison")
     save_nav_plot(validation_nav, plots_dir / "validation_nav.png", "Unified Validation NAV Comparison")
     save_nav_plot(test_nav, plots_dir / "test_nav.png", "Unified Test NAV Comparison")
